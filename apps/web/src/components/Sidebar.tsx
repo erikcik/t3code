@@ -792,7 +792,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     projectScopeItems,
   } = useSidebarLookups();
   const router = useRouter();
-  const { isMobile, setOpenMobile } = useSidebar();
+  const {
+    isMobile,
+    open: sidebarOpen,
+    openMobile,
+    setOpen: setSidebarOpen,
+    setOpenMobile,
+  } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
@@ -2630,6 +2636,23 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         navigateToThread(scopeThreadRef(targetThread.environmentId, targetThread.id));
         return true;
       };
+      if (command === "sidebar.filterByProject") {
+        if (projectGroups.length === 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const open = !projectScopeMenuState.open;
+        const toggleMenu = () => dispatchProjectScopeMenu({ type: "open-changed", open });
+        if (open) suppressNextScopeChangeRef.current = false;
+        if (!open || (isMobile ? openMobile : sidebarOpen)) {
+          toggleMenu();
+          return;
+        }
+        if (isMobile) setOpenMobile(true);
+        else setSidebarOpen(true);
+        // The picker anchors to the sidebar header, which is laid out only once the sidebar shows.
+        requestAnimationFrame(toggleMenu);
+        return;
+      }
       const traversalDirection = threadTraversalDirectionFromCommand(command);
       if (traversalDirection !== null) {
         navigateToThreadKey(
@@ -2648,11 +2671,18 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     window.addEventListener("keydown", onWindowKeyDown);
     return () => window.removeEventListener("keydown", onWindowKeyDown);
   }, [
+    isMobile,
     keybindings,
     navigateToThread,
+    openMobile,
     orderedThreadKeys,
+    projectGroups.length,
+    projectScopeMenuState.open,
     routeRowThreadKey,
     routeTerminalOpen,
+    setOpenMobile,
+    setSidebarOpen,
+    sidebarOpen,
     threadByKey,
   ]);
 
@@ -2691,6 +2721,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     shortcutLabelForCommand(keybindings, "chat.new") ??
     (projectGroups.length <= 1 ? shortcutLabelForCommand(keybindings, "chat.newLocal") : undefined);
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
+  const projectFilterShortcutLabel = shortcutLabelForCommand(
+    keybindings,
+    "sidebar.filterByProject",
+  );
   return (
     <>
       <ThreadContextDragGhost />
@@ -2731,9 +2765,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     render={
                       <SidebarHeaderIconButton
                         label={
-                          scopedProjectGroup
+                          (scopedProjectGroup
                             ? `Filter threads by project: ${scopedProjectGroup.displayName}`
-                            : "Filter threads by project"
+                            : "Filter threads by project") +
+                          (projectFilterShortcutLabel ? ` (${projectFilterShortcutLabel})` : "")
                         }
                       />
                     }
