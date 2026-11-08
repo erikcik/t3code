@@ -3,6 +3,8 @@ import type { AnyRouter } from "@tanstack/react-router";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import * as commandPalette from "../commandPaletteBus";
+import * as pickerStore from "../draftProjectPickerStore";
+import * as newThread from "../hooks/useHandleNewThread";
 import * as settings from "../hooks/useSettings";
 import * as threadActions from "../lib/chatThreadActions";
 import * as entities from "../state/entities";
@@ -60,6 +62,38 @@ describe("new thread commands", () => {
     } else {
       expect(openPicker).not.toHaveBeenCalled();
       expect(startLocal).toHaveBeenCalledOnce();
+    }
+  });
+});
+
+describe("chat.pickProject", () => {
+  it.each([
+    { route: "a showing draft", params: { draftId: "draft-1" }, showing: true },
+    { route: "a hidden draft", params: { draftId: "draft-1" }, showing: false },
+    { route: "a thread", params: { environmentId: "local", threadId: "thread-1" }, showing: false },
+  ])("on $route", async (scenario) => {
+    using _projects = vi.spyOn(entities, "readProjects").mockReturnValue([project("active")]);
+    using _showing = vi
+      .spyOn(pickerStore, "isDraftProjectPickerShowing")
+      .mockReturnValue(scenario.showing);
+    using toggle = vi.spyOn(pickerStore, "toggleDraftProjectPicker").mockImplementation(() => {});
+    using request = vi.spyOn(pickerStore, "requestDraftProjectPicker").mockImplementation(() => {});
+    const handleNewThread = vi.fn().mockResolvedValue({ draftId: "draft-2" });
+    using _handler = vi.spyOn(newThread, "createNewThreadHandler").mockReturnValue(handleNewThread);
+    using register = vi.spyOn(dispatcher, "registerCommands").mockReturnValue(() => {});
+    const router = { state: { matches: [{ params: scenario.params }] } } as unknown as AnyRouter;
+    using stack = new DisposableStack();
+    stack.defer(installChatRouteCommands(router));
+    const event = { preventDefault: vi.fn(), stopPropagation: vi.fn() } as unknown as KeyboardEvent;
+
+    register.mock.calls[0]![0]["chat.pickProject"]!(event);
+
+    if (scenario.showing) {
+      expect(toggle).toHaveBeenCalledWith("draft-1");
+      expect(handleNewThread).not.toHaveBeenCalled();
+    } else {
+      await vi.waitFor(() => expect(request).toHaveBeenCalledWith("draft-2"));
+      expect(toggle).not.toHaveBeenCalled();
     }
   });
 });

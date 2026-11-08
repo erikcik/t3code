@@ -5,9 +5,10 @@ import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/envir
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { FolderPlusIcon } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 
 import { openCommandPalette } from "~/commandPaletteBus";
+import { useDraftProjectPickerOpen } from "~/draftProjectPickerStore";
 import { shortcutLabelForCommand } from "~/keybindings";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
@@ -67,12 +68,14 @@ interface DraftHeroHeadlineProps {
   readonly draftId: DraftId | null;
   readonly activeProjectRef: ScopedProjectRef | null;
   readonly activeProjectTitle: string | null;
+  readonly focusComposer?: () => void;
 }
 
 export function DraftHeroHeadline({
   draftId,
   activeProjectRef,
   activeProjectTitle,
+  focusComposer,
 }: DraftHeroHeadlineProps) {
   const projects = useProjects();
   const threads = useVisibleThreadShells();
@@ -95,7 +98,8 @@ export function DraftHeroHeadline({
   const { scratchEnvironmentId, scratchWorkspaceRootFor, openScratchProject } = useScratchProject();
   const openProjectDraft = useNewThreadHandler();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const fallbackPickerKey = useId();
+  const [pickerOpen, setPickerOpen] = useDraftProjectPickerOpen(draftId ?? fallbackPickerKey);
   const [pickerQuery, setPickerQuery] = useState("");
   const pickerFilter = useComboboxFilter();
   const highlightedPickerValueRef = useRef<string | null>(null);
@@ -309,7 +313,23 @@ export function DraftHeroHeadline({
           <TooltipPopup side="top">{activeProjectTitle}</TooltipPopup>
         ) : null}
       </Tooltip>
-      <ComboboxPopup align="center" className="w-72 overflow-hidden">
+      <ComboboxPopup
+        align="center"
+        className="w-72 overflow-hidden"
+        // Keyboard users keep typing in the composer instead of landing on the trigger.
+        finalFocus={(closeType) => {
+          if (
+            !focusComposer ||
+            closeType === "mouse" ||
+            closeType === "touch" ||
+            closeType === "pen"
+          ) {
+            return true;
+          }
+          focusComposer();
+          return false;
+        }}
+      >
         <ComboboxSearchInput
           aria-label="Search projects"
           placeholder="Search projects..."

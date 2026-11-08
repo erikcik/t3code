@@ -169,6 +169,11 @@ through the pages you have visited, like a browser's back and forward buttons.
 [new-thread defaults](./thread-sidebar.md#start-a-thread). `chat.newWithoutProject`
 (`mod+alt+n`) starts a thread [without a project](./thread-sidebar.md#start-without-a-project).
 
+`chat.pickProject` has no default shortcut. It opens a new thread with its project
+picker already open: use the arrow keys to move, **Enter** to switch the thread to
+that project, and **Escape** to keep the current one. On a new thread, it opens and
+closes that thread's picker.
+
 `sidebar.filterByProject` (`mod+alt+p` by default) opens the sidebar's project
 filter, showing the sidebar first if it is hidden. Press it again to close the filter.
 

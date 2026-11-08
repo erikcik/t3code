@@ -381,6 +381,7 @@ export function commandLabel(command: KeybindingCommand): string {
   const usagePeriod = WINDOW_OPTIONS.find((option) => option.command === command);
   if (usagePeriod) return `Usage: Period: ${usagePeriod.label}`;
   if (command === "sidebar.filterByProject") return "Sidebar: Filter Threads by Project";
+  if (command === "chat.pickProject") return "New Thread: Pick Project";
   if (command === "view.reopenClosed") return "Reopen Closed Tab";
   if (command === "preview.focusUrl") return "Preview: Focus URL";
   const raw = String(command);

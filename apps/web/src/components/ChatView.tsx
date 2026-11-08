@@ -128,6 +128,7 @@ import {
 import { AsyncResult } from "effect/reactivity";
 import { isElectron } from "../env";
 import { useDiffPanelStore } from "../diffPanelStore";
+import { isDraftProjectPickerOpen } from "../draftProjectPickerStore";
 import { useActiveThreadRef } from "../hooks/useActiveThreadRef";
 import { composerRequiresModifier } from "../composer-logic";
 import {
@@ -2123,7 +2124,8 @@ export default function ChatView(props: ChatViewProps) {
   useEffect(() => {
     if (embedded || !activeThread?.id || terminalUiState.terminalOpen) return;
     const frame = window.requestAnimationFrame(() => {
-      focusComposerStable();
+      // chat.pickProject opens a new draft with its project picker focused.
+      if (!isDraftProjectPickerOpen()) focusComposerStable();
     });
     return () => {
       window.cancelAnimationFrame(frame);
@@ -3529,6 +3531,7 @@ export default function ChatView(props: ChatViewProps) {
                           draftId={draftId}
                           activeProjectRef={activeProjectRef}
                           activeProjectTitle={activeProject?.title ?? null}
+                          focusComposer={focusComposerStable}
                         />
                       </div>
                     </div>

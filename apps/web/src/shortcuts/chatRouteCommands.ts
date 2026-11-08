@@ -8,10 +8,15 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { dispatchPreviewAction, type PreviewAction } from "../components/preview/previewActionBus";
 import { isAppModalPage } from "../components/sidebar/mainAppLocation";
 import { shouldCreateNewThreadInCurrentProject } from "../components/Sidebar.logic";
+import {
+  isDraftProjectPickerShowing,
+  requestDraftProjectPicker,
+  toggleDraftProjectPicker,
+} from "../draftProjectPickerStore";
 import { createNewThreadHandler, resolveDefaultProjectRef } from "../hooks/useHandleNewThread";
 import { createScratchProjectActions } from "../hooks/useScratchProject";
 import { getClientSettings } from "../hooks/useSettings";
-import { startNewThreadFromContext } from "../lib/chatThreadActions";
+import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import { selectProjectGroupingSettings } from "@t3tools/client-runtime/state/project-grouping";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -138,6 +143,23 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
           return;
         }
         startNewLocal(event);
+      },
+      "chat.pickProject": (event) => {
+        claim(event);
+        if (event.repeat) return;
+        const target = readRouteTarget();
+        if (target?.kind === "draft" && isDraftProjectPickerShowing(target.draftId)) {
+          toggleDraftProjectPicker(target.draftId);
+          return;
+        }
+        const projectRef = resolveThreadActionProjectRef(readThreadContext());
+        if (!projectRef) {
+          openCommandPalette({ open: "new-thread-in" });
+          return;
+        }
+        void handleNewThread(projectRef).then((draft) => {
+          if (draft) requestDraftProjectPicker(draft.draftId);
+        });
       },
       "preview.toggle": (event) => {
         claim(event);
