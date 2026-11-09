@@ -22,6 +22,7 @@ import {
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   AuthOrchestrationOperateScope,
+  hasCeoThreadTag,
   type EnvironmentId,
   type EnvironmentMachineKind,
   type ScopedThreadRef,
@@ -663,6 +664,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     return leaseRowRef(row);
   };
   const isRegeneratingTitle = thread.titleRegeneration != null;
+  const isCeoThread = hasCeoThreadTag(thread.source.tags);
   const localLastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const lastVisitedAt = resolveThreadLastVisitedAt(thread.lastVisitedAt, localLastVisitedAt);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
@@ -1036,6 +1038,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                     ? "text-muted-foreground"
                     : "text-secondary-label/70",
             ),
+        // Experimental CEO review threads read orange.
+        isCeoThread &&
+          (shouldRecede
+            ? "text-ceo-foreground/75 group-hover/sidebar-row:text-ceo-foreground"
+            : "text-ceo-foreground"),
         isRegeneratingTitle && "opacity-55",
       )}
       dir={textDirection(thread.title)}

@@ -302,6 +302,7 @@ function makeLocalCommandHarness(input: {
     readonly contextRun: "current" | "failed" | "cancelled" | "delivered";
     readonly nativeForkFrom?: "idle" | "busy";
     readonly switchedProvider?: boolean;
+    readonly ceo?: boolean;
   };
 }) {
   const settledRuns: Array<string> = [];
@@ -572,6 +573,7 @@ function makeLocalCommandHarness(input: {
           relationshipToParent: "fork",
           rootThreadId: parentThreadId,
           sideChat: true,
+          ...(input.sideChat.ceo ? { ceo: true } : {}),
         },
       },
       runs:
@@ -1270,6 +1272,8 @@ effectIt.effect.each([
     context: "SIDE_CHAT_CONTEXT",
   },
   { contextRun: "delivered", runtimeMode: "full-access", context: "" },
+  // A CEO side chat runs unattended, so its context turn keeps the thread's mode.
+  { contextRun: "current", ceo: true, runtimeMode: "full-access", context: "SIDE_CHAT_CONTEXT" },
 ] as const)(
   "sends side chat context inline once, for the first turn that reaches the provider: %j",
   ({ runtimeMode, context, ...sideChat }) =>

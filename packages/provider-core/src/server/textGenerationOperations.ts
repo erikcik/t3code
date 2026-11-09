@@ -8,6 +8,7 @@ import { extractJsonObject } from "@t3tools/shared/schemaJson";
 import type { ProviderTextGeneration } from "./textGeneration.ts";
 import {
   buildBranchNamePrompt,
+  buildCeoContextPrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildReviewGuidePrompt,
@@ -167,11 +168,24 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     });
   });
 
+  const generateCeoContext: ProviderTextGeneration["generateCeoContext"] = Effect.fn(
+    `${name}.generateCeoContext`,
+  )(function* (input) {
+    const generated = yield* run({
+      operation: "generateCeoContext",
+      cwd: input.cwd,
+      modelSelection: input.modelSelection,
+      ...buildCeoContextPrompt({ threadTitle: input.threadTitle, transcript: input.transcript }),
+    });
+    return { context: generated.context.trim() };
+  });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateReviewGuide,
+    generateCeoContext,
   } satisfies ProviderTextGeneration;
 }

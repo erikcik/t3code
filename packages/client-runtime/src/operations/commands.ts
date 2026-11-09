@@ -521,6 +521,22 @@ export const setThreadAutoSettle = Effect.fn("EnvironmentCommands.setThreadAutoS
   });
 });
 
+export interface SetThreadTagInput extends ThreadCommandInput {
+  readonly tag: string;
+  readonly tagged: boolean;
+}
+export const setThreadTag = Effect.fn("EnvironmentCommands.setThreadTag")(function* (
+  input: SetThreadTagInput,
+) {
+  return yield* dispatch({
+    type: "thread.tag.set",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    tag: input.tag,
+    tagged: input.tagged,
+  });
+});
+
 export const reorderPinnedThread = Effect.fn("EnvironmentCommands.reorderPinnedThread")(function* (
   input: ReorderPinnedThreadInput,
 ) {

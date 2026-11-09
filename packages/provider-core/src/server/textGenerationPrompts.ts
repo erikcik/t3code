@@ -482,3 +482,45 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
 
   return { prompt, outputSchema };
 }
+
+export interface CeoContextPromptInput {
+  threadTitle: string;
+  transcript: string;
+}
+
+const CEO_CONTEXT_TRANSCRIPT_MAX_CHARS = 90_000;
+
+/** Kept separate from the CEO so suggestions in the transcript never reach its context. */
+export function buildCeoContextPrompt(input: CeoContextPromptInput) {
+  const prompt = [
+    "You prepare a briefing about a coding-agent session for an independent reviewer.",
+    "The reviewer must decide on its own what should happen next, so the briefing must carry no forward-looking guidance from the session.",
+    "",
+    "KEEP:",
+    "- The user's goals, vision, requirements, constraints, preferences and decisions, in the user's own terms. State them as goals and decisions, never as an ordered to-do list.",
+    "- What was actually done: changes made, commands run, files touched, results, and what works now.",
+    "- Facts learned, problems hit, errors, and anything left unresolved, stated as plain facts.",
+    "- File paths, services, commands, URLs and numbers that matter.",
+    "",
+    "REMOVE completely. Do not summarize, paraphrase, hint at, or count any of these:",
+    "- Any suggestion, recommendation, proposal, option list, or plan for what to do next, from the assistant or the user.",
+    "- Offers and questions about follow-up work, such as 'want me to...', 'should I...', 'next we could...'.",
+    "- Next steps, TODO, follow-up, future work and remaining work lists, roadmaps, and planned items that were not started.",
+    "- Proposed fixes for unresolved problems. Keep the problem, drop the fix.",
+    "- Opinions about which direction is best.",
+    "If a sentence mixes a fact with a suggestion, keep only the fact.",
+    "",
+    "Write in the third person: past tense for what happened, present tense for the current state.",
+    "Use these sections: Goal and vision; What happened; Current state; Open problems (facts only).",
+    "Stay under 1,800 words. Add nothing that is not in the transcript.",
+    "",
+    `Thread title: ${input.threadTitle}`,
+    "",
+    "Transcript:",
+    limitSection(input.transcript, CEO_CONTEXT_TRANSCRIPT_MAX_CHARS),
+  ].join("\n");
+  const outputSchema = Schema.Struct({
+    context: Schema.String,
+  });
+  return { prompt, outputSchema };
+}

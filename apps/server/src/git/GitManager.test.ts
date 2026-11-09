@@ -290,6 +290,7 @@ function createTextGeneration(
         title: "Update workflow",
       }),
     generateReviewGuide: () => Effect.succeed({ stops: [] }),
+    generateCeoContext: () => Effect.succeed({ context: "" }),
     ...overrides,
   };
 
@@ -339,6 +340,7 @@ function createTextGeneration(
         ),
       ),
     generateReviewGuide: (input) => implementation.generateReviewGuide(input),
+    generateCeoContext: (input) => implementation.generateCeoContext(input),
   };
 }
 

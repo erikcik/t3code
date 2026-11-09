@@ -4480,7 +4480,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
 
-    const sourceRun = runForSourcePoint(sourceProjection, command.sourcePoint);
+    if (command.ceo === true && command.sideChat !== true) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "Only a side chat can be a CEO chat.",
+      });
+    }
+    // A CEO side chat forks no provider session, so none of the parent's raw context carries over.
+    const sourceRun =
+      command.ceo === true ? null : runForSourcePoint(sourceProjection, command.sourcePoint);
 
     // A side chat may open during the parent's first turn; it starts from a digest instead.
     if (
@@ -4528,6 +4537,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         targetThreadId: command.targetThreadId,
         ...(command.title === undefined ? {} : { title: command.title }),
         ...(command.sideChat ? { sideChat: true } : {}),
+        ...(command.ceo ? { ceo: true } : {}),
         createdBy: command.createdBy,
         creationSource: command.creationSource,
         createdAt: now,
@@ -6728,6 +6738,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           undefined);
     const sideChatFork =
       pendingForkTransfer !== undefined && projection.thread.lineage.sideChat === true;
+    // Its first message carries a cleaned context; the parent's own rows stay out.
+    const ceoSideChat = sideChatFork && projection.thread.lineage.ceo === true;
     // Opened during the parent's first turn: the digest is the whole context.
     const sideChatWithoutSource =
       sideChatFork && pendingForkTransfer.sourcePoint.runId === undefined;
@@ -6922,7 +6934,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         : []),
     ];
     const sideChatParentItems =
-      !sideChatFork || sourceProjection === null
+      !sideChatFork || ceoSideChat || sourceProjection === null
         ? []
         : [
             ...(sideChatWithoutSource ? yield* readInheritedItems(sourceProjection.thread) : []),
@@ -6949,6 +6961,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               toProviderInstanceId: modelSelection.instanceId,
               coveredRunOrdinals: visibleDeltaRunOrdinals(sourceProjection, sideChatParentItems),
               parentItems: sideChatParentItems,
+              ...(ceoSideChat ? { ceo: true } : {}),
               createdAt: now,
             })
             .pipe(mapDispatchError(command));

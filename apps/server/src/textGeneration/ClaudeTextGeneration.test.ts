@@ -286,6 +286,29 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
       ),
   );
 
+  it.effect("cleans CEO context outside the project, from the transcript alone", () =>
+    withFakeClaudeEnv(
+      {
+        output: JSON.stringify({ structured_output: { context: "  Goal: ship.  " } }),
+        cwdMustNotBe: process.cwd(),
+        stdinMustContain: "User: Ship the store",
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.generateCeoContext({
+            cwd: process.cwd(),
+            threadTitle: "Store",
+            transcript: "User: Ship the store",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("claudeAgent"),
+              model: SYNTHETIC_CLAUDE_STANDARD_MODEL,
+            },
+          });
+          expect(generated.context).toBe("Goal: ship.");
+        }),
+    ),
+  );
+
   it.effect("sends thread title instructions to the provider prompt", () =>
     withFakeClaudeEnv(
       {

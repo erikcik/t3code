@@ -20,6 +20,7 @@ import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textG
 import { investigationUnsupported } from "@t3tools/provider-core/server/textGenerationOperations";
 import {
   buildBranchNamePrompt,
+  buildCeoContextPrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
@@ -342,11 +343,22 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
   });
   const generateReviewGuide: ProviderTextGeneration["generateReviewGuide"] = () =>
     Effect.fail(investigationUnsupported("generateReviewGuide", "Muse Code"));
+  const generateCeoContext: ProviderTextGeneration["generateCeoContext"] = Effect.fn(
+    "MuseTextGeneration.generateCeoContext",
+  )(function* (input) {
+    const generated = yield* runMuseJson({
+      operation: "generateCeoContext",
+      ...buildCeoContextPrompt(input),
+      modelSelection: input.modelSelection,
+    });
+    return { context: generated.context.trim() };
+  });
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateReviewGuide,
+    generateCeoContext,
   } satisfies ProviderTextGeneration;
 });

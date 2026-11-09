@@ -97,6 +97,17 @@ export type ReviewGuideGenerationResult = Omit<
   "headSha" | "generatedAt" | "modelSelection"
 >;
 
+export interface CeoContextGenerationInput {
+  cwd: string;
+  threadTitle: string;
+  transcript: string;
+  modelSelection: ModelSelection;
+}
+
+export interface CeoContextGenerationResult {
+  context: string;
+}
+
 export interface ProviderTextGeneration {
   readonly generateCommitMessage: (
     input: CommitMessageGenerationInput,
@@ -117,4 +128,9 @@ export interface ProviderTextGeneration {
   readonly generateReviewGuide: (
     input: ReviewGuideGenerationInput,
   ) => Effect.Effect<ReviewGuideGenerationResult, TextGenerationError>;
+
+  /** Rewrites a thread transcript into facts and goals, dropping every next-step suggestion. */
+  readonly generateCeoContext: (
+    input: CeoContextGenerationInput,
+  ) => Effect.Effect<CeoContextGenerationResult, TextGenerationError>;
 }

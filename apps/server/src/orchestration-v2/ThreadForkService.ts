@@ -60,6 +60,7 @@ export interface ThreadForkServiceV2Shape {
     readonly targetThreadId: ThreadId;
     readonly title?: string;
     readonly sideChat?: boolean;
+    readonly ceo?: boolean;
     readonly createdBy: OrchestrationV2Actor;
     readonly creationSource: OrchestrationV2CreationSource;
     readonly createdAt: DateTime.Utc;
@@ -113,14 +114,18 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
         title: input.title ?? `${input.sourceProjection.thread.title} fork`,
         // The source's title job completes only on the source thread.
         titleRegeneration: null,
-        // Side chats share the parent's worktree, so they start supervised.
-        ...(input.sideChat ? { runtimeMode: "approval-required" as const } : {}),
+        // Side chats share the parent's worktree, so they start supervised. A CEO side chat runs
+        // unattended and is told to stay read-only.
+        ...(input.sideChat
+          ? { runtimeMode: input.ceo ? ("full-access" as const) : ("approval-required" as const) }
+          : {}),
         activeProviderThreadId: null,
         lineage: {
           parentThreadId: input.sourceProjection.thread.id,
           relationshipToParent: "fork",
           rootThreadId: input.sourceProjection.thread.lineage.rootThreadId,
           ...(input.sideChat ? { sideChat: true } : {}),
+          ...(input.sideChat && input.ceo ? { ceo: true } : {}),
         },
         forkedFrom:
           sourceRun === null

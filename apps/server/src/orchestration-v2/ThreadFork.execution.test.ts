@@ -979,6 +979,61 @@ it.effect("a side chat of an idle parent still starts with the framing note", ()
   }).pipe(Effect.provide(forkCases[0]!.layer)),
 );
 
+it.effect("a CEO side chat inherits none of the parent's context, native or digested", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const parentId = ThreadId.make("ceo-side-chat-parent");
+    const ceoId = ThreadId.make("ceo-side-chat-child");
+    yield* createParent(parentId);
+    yield* writeParentRun({
+      threadId: parentId,
+      runId: RunId.make("ceo-side-chat-parent-run"),
+      ordinal: 1,
+      status: "completed",
+      text: "PARENT_NEXT_STEP_MARKER",
+      stable: true,
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.fork",
+      commandId: CommandId.make("ceo-side-chat-fork"),
+      sourceThreadId: parentId,
+      targetThreadId: ceoId,
+      sourcePoint: { type: "latest_stable" },
+      sideChat: true,
+      ceo: true,
+      createdBy: "agent",
+      creationSource: "server",
+    });
+    const created = yield* orchestrator.getThreadProjection(ceoId);
+    assert.isTrue(created.thread.lineage.ceo);
+    assert.equal(created.thread.runtimeMode, "full-access");
+    assert.isNull(created.thread.forkedFrom);
+
+    yield* askSideChat(ceoId, "ceo-side-chat-first-message");
+    const started = yield* orchestrator.getThreadProjection(ceoId);
+    assert.isNull(started.providerThreads[0]?.forkedFrom ?? null);
+    assert.lengthOf(started.contextHandoffs, 1);
+    const [handoff] = started.contextHandoffs;
+    assert.isTrue(handoff!.summaryText.startsWith("You are a CEO side chat"));
+    assert.notInclude(handoff!.summaryText, "PARENT_NEXT_STEP_MARKER");
+    assert.notInclude(handoff!.summaryText, "t3_thread_read");
+
+    const notSideChat = yield* orchestrator
+      .dispatch({
+        type: "thread.fork",
+        commandId: CommandId.make("ceo-side-chat-listed-fork"),
+        sourceThreadId: parentId,
+        targetThreadId: ThreadId.make("ceo-side-chat-listed"),
+        sourcePoint: { type: "latest_stable" },
+        ceo: true,
+        createdBy: "agent",
+        creationSource: "server",
+      })
+      .pipe(Effect.flip);
+    assert.equal(notSideChat._tag, "OrchestratorDispatchError");
+  }).pipe(Effect.provide(forkCases[0]!.layer)),
+);
+
 it.effect("a side chat waits for the parent's new worktree, also after its setup ended", () =>
   Effect.gen(function* () {
     for (const status of ["preparing", "failed", "interrupted"] as const) {

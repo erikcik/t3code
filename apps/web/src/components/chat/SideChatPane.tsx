@@ -16,7 +16,9 @@ import { useEffect, useState } from "react";
 
 import { ComposerHandleContext } from "../../composerHandleContext";
 import { useClientSettings } from "../../hooks/useSettings";
+import { extractCeoPrompt, placeCeoPrompt } from "../../lib/ceoSideChat";
 import type { SideChatParentPanel } from "../../lib/sideChatPane";
+import { cn } from "../../lib/utils";
 import { readLocalApi } from "../../localApi";
 import { hostRightPanel, useRightPanelStore } from "../../rightPanelStore";
 import { useQuietThreadProjection, useQuietThreadShell } from "../../state/entities";
@@ -55,6 +57,8 @@ export default function SideChatPane(props: {
   const [bringingBack, setBringingBack] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const mergeRun = projection ? resolveLatestMergeBackRun(projection) : null;
+  const isCeo = shell?.lineage.ceo === true;
+  const ceoPrompt = isCeo && projection ? extractCeoPrompt(projection.messages) : null;
   // A pending merge-back would fail the main thread's queued message, so the server refuses it.
   const bringBackBlockedReason = !canOperate
     ? "This connection cannot change threads."
@@ -125,26 +129,55 @@ export default function SideChatPane(props: {
   return (
     <div data-side-chat-pane className="flex h-full min-h-0 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border pr-1 pl-3">
-        <span className="min-w-0 flex-1 truncate text-xs font-medium">
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate text-xs font-medium",
+            isCeo && "text-ceo-foreground",
+          )}
+        >
           {shell?.title ?? "Side chat"}
         </span>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="xs"
-                aria-disabled={bringBackBlockedReason !== null || bringingBack || undefined}
-                onClick={() => void bringBack()}
-              >
-                Bring back
-              </Button>
-            }
-          />
-          <TooltipPopup side="bottom">
-            {bringBackBlockedReason ?? "Adds this side chat to the main thread's next message."}
-          </TooltipPopup>
-        </Tooltip>
+        {isCeo ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  aria-disabled={ceoPrompt === null || undefined}
+                  onClick={() => {
+                    if (ceoPrompt !== null) placeCeoPrompt(parentRef, ceoPrompt);
+                  }}
+                >
+                  Use prompt
+                </Button>
+              }
+            />
+            <TooltipPopup side="bottom">
+              {ceoPrompt === null
+                ? "Available once the CEO has written its prompt."
+                : "Puts the proposed prompt in the main thread's composer."}
+            </TooltipPopup>
+          </Tooltip>
+        ) : (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  aria-disabled={bringBackBlockedReason !== null || bringingBack || undefined}
+                  onClick={() => void bringBack()}
+                >
+                  Bring back
+                </Button>
+              }
+            />
+            <TooltipPopup side="bottom">
+              {bringBackBlockedReason ?? "Adds this side chat to the main thread's next message."}
+            </TooltipPopup>
+          </Tooltip>
+        )}
         <Button
           variant="ghost"
           size="icon-xs"

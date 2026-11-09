@@ -95,6 +95,7 @@ export interface ContextHandoffServiceV2Shape {
     readonly toProviderInstanceId: ProviderInstanceId;
     readonly coveredRunOrdinals: OrchestrationV2ContextHandoff["coveredRunOrdinals"];
     readonly parentItems: ReadonlyArray<OrchestrationV2TurnItem>;
+    readonly ceo?: boolean;
     readonly createdAt: DateTime.Utc;
   }) => Effect.Effect<OrchestrationV2ContextHandoff, ContextHandoffServiceV2Error>;
 }
@@ -246,11 +247,16 @@ function makeForkDeltaSummary(input: {
 
 const SIDE_CHAT_CONTEXT_MAX_CHARS = 8_000;
 
+const CEO_SIDE_CHAT_FRAMING =
+  "You are a CEO side chat beside the main thread. The main thread may keep working in the same worktree. Your only view of it is the cleaned context in the first message: do not read the main thread itself, its provider transcript, or its T3 thread record. Stay read-only: change no files, run nothing that writes, and message no one.";
+
 /** Oldest first; raw parent items are summarized only until the context cap is reached. */
 export function makeSideChatContext(input: {
   readonly parentThreadId: ThreadId;
   readonly digest: ReadonlyArray<string | OrchestrationV2TurnItem>;
+  readonly ceo?: boolean;
 }): string {
+  if (input.ceo) return CEO_SIDE_CHAT_FRAMING;
   const framing =
     "You are in a side chat beside the main thread. The main thread may still be running in the same worktree. Answer the user's questions; do not continue or redo the main thread's task.";
   const header = "Main thread activity since this side chat's starting point:";
@@ -596,6 +602,7 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
         summaryText: makeSideChatContext({
           parentThreadId: input.parentThreadId,
           digest: input.parentItems,
+          ...(input.ceo ? { ceo: true } : {}),
         }),
         createdByProviderInstanceId: null,
         createdAt: input.createdAt,

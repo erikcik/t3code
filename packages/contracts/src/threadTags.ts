@@ -16,3 +16,11 @@ export type ThreadTag = typeof ThreadTag.Type;
 export const StoredThreadTags = Schema.Array(Schema.String).pipe(
   Schema.catchDecoding(() => Effect.succeedSome([])),
 );
+
+/** Threads with this tag get a CEO side chat after each finished turn. */
+export const CEO_THREAD_TAG = "ceo";
+
+export const isCeoThreadTag = (tag: string): boolean => tag.trim().toLowerCase() === CEO_THREAD_TAG;
+
+export const hasCeoThreadTag = (tags: ReadonlyArray<string> | undefined): boolean =>
+  tags?.some(isCeoThreadTag) === true;
