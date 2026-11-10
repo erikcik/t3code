@@ -524,3 +524,54 @@ export function buildCeoContextPrompt(input: CeoContextPromptInput) {
   });
   return { prompt, outputSchema };
 }
+
+export interface CeoFeedbackPromptInput {
+  today: string;
+  projectTitle: string;
+  threadTitle: string;
+  proposal: string;
+  reply: string;
+  playbook: string;
+}
+
+/** The playbook every later CEO reads; the user's newest feedback wins over older rules. */
+export function buildCeoFeedbackPrompt(input: CeoFeedbackPromptInput) {
+  const prompt = [
+    "You maintain the playbook an AI 'CEO' follows when it proposes the user's next step in a project and writes the prompt for it.",
+    "The user just replied to one CEO proposal. Do three things.",
+    "",
+    "1. verdict: how the reply judges the proposal.",
+    "- praise: the user approves of it or of part of it (for example 'good job', 'this is a good suggestion', 'exactly').",
+    "- criticism: the user rejects or corrects it, calls it weak or wrong, or says what it should have proposed or done instead.",
+    "- mixed: both.",
+    "- none: a plain question or instruction that does not judge the proposal.",
+    "",
+    "2. lesson: unless the verdict is none, one or two sentences addressed to future CEOs: what to do or avoid, and why, in the user's terms.",
+    "Make it general enough to help with other proposals. When it only applies to this project, start it with the project name in brackets.",
+    "For praise, name what worked so future CEOs keep doing it.",
+    "",
+    "3. playbook: the full updated playbook in markdown with exactly two sections, '## Do' and '## Avoid', each a bullet list.",
+    "Merge the lesson in: sharpen an existing rule rather than add a near-duplicate. When the new feedback contradicts an older rule, the new feedback wins, so rewrite that rule.",
+    `Leave every other rule as it is. Keep at most 40 rules. End each rule you add or change with (${input.today}).`,
+    "If the verdict is none, return the playbook exactly as given.",
+    "",
+    `Today: ${input.today}`,
+    `Project: ${input.projectTitle}`,
+    `Main thread: ${input.threadTitle}`,
+    "",
+    "Current playbook:",
+    input.playbook.trim().length === 0 ? "(empty)" : limitSection(input.playbook, 20_000),
+    "",
+    "The CEO proposal the user replied to:",
+    limitSection(input.proposal, 12_000),
+    "",
+    "The user's reply:",
+    limitSection(input.reply, 8_000),
+  ].join("\n");
+  const outputSchema = Schema.Struct({
+    verdict: Schema.Literals(["praise", "criticism", "mixed", "none"]),
+    lesson: Schema.String,
+    playbook: Schema.String,
+  });
+  return { prompt, outputSchema };
+}

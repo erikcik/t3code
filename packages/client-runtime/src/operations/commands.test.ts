@@ -216,7 +216,8 @@ describe("V2 environment commands", () => {
   it.effect("preserves an existing worktree and branch during first-message launch", () =>
     Effect.gen(function* () {
       const launches: OrchestrationV2ThreadLaunchInput[] = [];
-      const supervisor = yield* makeSupervisor({ commands: [], projects: [], launches });
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [], launches });
 
       yield* startThreadTurn({
         commandId: CommandId.make("launch-existing-worktree"),
@@ -240,6 +241,7 @@ describe("V2 environment commands", () => {
             branch: "feature",
             worktreePath: "/workspace/project-worktrees/feature",
             createdAt: "2026-06-20T00:00:00.000Z",
+            tags: ["ceo"],
           },
         },
       }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
@@ -254,6 +256,11 @@ describe("V2 environment commands", () => {
           branch: "feature",
         },
       });
+      expect(launches[0]).not.toHaveProperty("tags");
+      // A tag chosen on the draft lands on the thread the launch created.
+      expect(commands).toMatchObject([
+        { type: "thread.tag.set", threadId: v2ThreadId, tag: "ceo", tagged: true },
+      ]);
     }).pipe(Effect.provide(layerTestRandom)),
   );
 

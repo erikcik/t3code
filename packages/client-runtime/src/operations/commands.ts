@@ -155,6 +155,8 @@ interface StartThreadBootstrap {
     readonly branch: string | null;
     readonly worktreePath: string | null;
     readonly createdAt: string;
+    /** Set on the new thread right after it is created, such as `ceo` chosen on a draft. */
+    readonly tags?: ReadonlyArray<string>;
   };
   readonly prepareWorktree?: {
     readonly requireWorktree?: boolean;
@@ -725,7 +727,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
                 ? {}
                 : { branch: bootstrap.branch }),
             };
-    return yield* request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
+    const launched = yield* request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
       commandId,
       creationSource: input.creationSource ?? "web",
       threadId: input.threadId,
@@ -744,6 +746,17 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
         attachments,
       },
     });
+    for (const tag of bootstrap?.tags ?? []) {
+      // The turn already started; a missing tag must not report it as failed.
+      yield* dispatch({
+        type: "thread.tag.set",
+        commandId: CommandId.make(`${commandId}:tag:${tag}`),
+        threadId: launched.threadId,
+        tag,
+        tagged: true,
+      }).pipe(Effect.ignore);
+    }
+    return launched;
   }
 
   const requestedMode = input.dispatchMode ?? "auto";

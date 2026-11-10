@@ -286,6 +286,8 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
       protect("generateReviewGuide", nativeGeneration.generateReviewGuide(value)),
     generateCeoContext: (value) =>
       protect("generateCeoContext", nativeGeneration.generateCeoContext(value)),
+    generateCeoFeedback: (value) =>
+      protect("generateCeoFeedback", nativeGeneration.generateCeoFeedback(value)),
   };
   return {
     instanceId,

@@ -291,6 +291,7 @@ function createTextGeneration(
       }),
     generateReviewGuide: () => Effect.succeed({ stops: [] }),
     generateCeoContext: () => Effect.succeed({ context: "" }),
+    generateCeoFeedback: () => Effect.succeed({ verdict: "none", lesson: "", playbook: "" }),
     ...overrides,
   };
 
@@ -341,6 +342,7 @@ function createTextGeneration(
       ),
     generateReviewGuide: (input) => implementation.generateReviewGuide(input),
     generateCeoContext: (input) => implementation.generateCeoContext(input),
+    generateCeoFeedback: (input) => implementation.generateCeoFeedback(input),
   };
 }
 

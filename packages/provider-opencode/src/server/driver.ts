@@ -160,6 +160,11 @@ function selectOpenCodeRuntimeTextGeneration(
         v1: v1.generateCeoContext(input),
         v2: v2.generateCeoContext(input),
       }),
+    generateCeoFeedback: (input) =>
+      byOpenCodeRuntime(probe.get, {
+        v1: v1.generateCeoFeedback(input),
+        v2: v2.generateCeoFeedback(input),
+      }),
   };
 }
 

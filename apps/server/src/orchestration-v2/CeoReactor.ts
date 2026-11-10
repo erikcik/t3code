@@ -9,11 +9,13 @@ import {
   type OrchestrationV2Run,
   type RunId,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FiberMap from "effect/FiberMap";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
@@ -37,6 +39,26 @@ const CONTEXT_MODEL: ModelSelection = {
   model: "claude-sonnet-5-5",
   options: [{ id: "effort", value: "medium" }],
 };
+
+// Rewrites the playbook every later CEO follows, so it gets the stronger model.
+const FEEDBACK_MODEL: ModelSelection = {
+  instanceId: CLAUDE_INSTANCE_ID,
+  model: "claude-opus-5-5",
+  options: [{ id: "effort", value: "high" }],
+};
+
+/** CEO side chats are created as `ceo:<parent>:<turn>`, so their events route without a read. */
+const CEO_THREAD_PREFIX = "ceo:";
+
+const FEEDBACK_LOG_HEADER =
+  "# CEO feedback log\n\nEvery reply that judged a CEO proposal, oldest first. playbook.md is distilled from these.\n";
+
+const quote = (text: string) =>
+  text
+    .trim()
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
 
 const BUSY_RUN_STATUSES: ReadonlyArray<OrchestrationV2Run["status"]> = [
   "queued",
@@ -62,9 +84,9 @@ const isCeoReviewedThread = (
   thread.deletedAt === null;
 
 /**
- * Experimental CEO review. When a thread tagged `ceo` finishes a turn and goes idle, a separate
- * model call rewrites its transcript without any next-step suggestions, then an Opus side chat
- * reads only that cleaned context and proposes the next prompt for the main thread.
+ * Experimental CEO review: a finished turn of a `ceo` thread gets an Opus side chat that sees only
+ * a transcript cleaned of next-step ideas. Replies judging a proposal go to `ceo/feedback.md` and
+ * rewrite `ceo/playbook.md`, which every later brief carries.
  */
 export const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -81,6 +103,14 @@ export const make = Effect.gen(function* () {
       Effect.map((text) => (text.trim().length === 0 ? null : text.trim())),
       Effect.orElseSucceed(() => null),
     );
+
+  const ceoDir = path.join(stateDir, "ceo");
+  const playbookPath = path.join(ceoDir, "playbook.md");
+  const feedbackPath = path.join(ceoDir, "feedback.md");
+  const readText = (file: string) =>
+    fileSystem.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+  // Playbook rewrites read and write one file; two replies at once must not drop a lesson.
+  const learning = yield* Semaphore.make(1);
 
   // Proposals the user never answered are replaced by the newer one.
   const supersede = Effect.fn("CeoReactor.supersede")(function* (
@@ -178,6 +208,7 @@ export const make = Effect.gen(function* () {
             : [providerThread.nativeThreadRef.nativeId],
         ),
         userInstructions: yield* userInstructions,
+        playbook: (yield* readText(playbookPath)).trim() || null,
       });
       // A newer turn must not cut in between the fork and its first message.
       yield* Effect.uninterruptible(
@@ -216,15 +247,102 @@ export const make = Effect.gen(function* () {
       ),
   );
 
+  /** Saves the user's judgment of a CEO proposal and folds its lesson into the playbook. */
+  const learn = Effect.fn("CeoReactor.learn")(
+    function* (ceoThreadId: ThreadId, runId: RunId) {
+      const records = yield* projections.getThreadRecords(ceoThreadId, ["runs", "messages"], {
+        messageRoles: ["user", "assistant"],
+      });
+      const { thread } = records;
+      const parentThreadId = thread.lineage.parentThreadId;
+      if (thread.lineage.ceo !== true || parentThreadId === null) return;
+      const run = records.runs.find((candidate) => candidate.id === runId);
+      if (run === undefined) return;
+      const reply = records.messages.find((message) => message.id === run.userMessageId);
+      // The brief is the server's own message; only the user's replies carry a judgment.
+      if (reply === undefined || reply.createdBy !== "user" || reply.text.trim() === "") return;
+      const earlierRunIds = new Set(
+        records.runs.filter((other) => other.ordinal < run.ordinal).map((other) => other.id),
+      );
+      const proposal = records.messages.findLast(
+        (message) =>
+          message.role === "assistant" &&
+          !message.streaming &&
+          message.runId !== null &&
+          earlierRunIds.has(message.runId) &&
+          message.text.trim() !== "",
+      );
+      if (proposal === undefined) return;
+      const parent = yield* projections.getThread(parentThreadId);
+      const project = yield* projects.get(parent.projectId);
+      const projectTitle = Option.isSome(project) ? project.value.title : parent.title;
+      const today = DateTime.formatIso(yield* DateTime.now).slice(0, 10);
+      const marker = `<!-- run:${runId} -->`;
+      yield* learning.withPermits(1)(
+        Effect.gen(function* () {
+          const log = yield* readText(feedbackPath);
+          if (log.includes(marker)) return;
+          const judged = yield* textGeneration.generateCeoFeedback({
+            cwd: stateDir,
+            today,
+            projectTitle,
+            threadTitle: parent.title,
+            proposal: proposal.text,
+            reply: reply.text,
+            playbook: yield* readText(playbookPath),
+            modelSelection: FEEDBACK_MODEL,
+          });
+          if (judged.verdict === "none") return;
+          const entry = [
+            `## ${today} · ${judged.verdict} · ${projectTitle} · ${parent.title}`,
+            marker,
+            "",
+            "**Your reply:**",
+            quote(reply.text),
+            "",
+            `**Lesson:** ${judged.lesson}`,
+            "",
+            `**Proposal judged** (${ceoThreadId}):`,
+            quote(proposal.text.slice(0, 600) + (proposal.text.length > 600 ? " [...]" : "")),
+            "",
+          ].join("\n");
+          yield* fileSystem.makeDirectory(ceoDir, { recursive: true });
+          yield* fileSystem.writeFileString(
+            feedbackPath,
+            `${log.trim() === "" ? FEEDBACK_LOG_HEADER : log.trimEnd() + "\n"}\n${entry}`,
+          );
+          if (judged.playbook !== "") {
+            yield* fileSystem.writeFileString(playbookPath, `${judged.playbook}\n`);
+          }
+        }),
+      );
+    },
+    (effect, ceoThreadId) =>
+      effect.pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("CEO feedback not recorded", { ceoThreadId, cause }),
+        ),
+      ),
+  );
+
   const start = Effect.fn("CeoReactor.start")(function* () {
     // Keyed by thread: a newer finished turn interrupts a review still cleaning the older one.
     const reviews = yield* FiberMap.make<ThreadId>();
+    // Keyed by run, and never replaced: every reply the user sends is learned from.
+    const lessons = yield* FiberMap.make<RunId>();
     yield* forkParked(
-      Stream.runForEach(orchestrator.streamDomainEvents, (event) =>
-        event.type === "run.updated" && event.payload.status === "completed"
-          ? FiberMap.run(reviews, event.threadId, review(event.threadId, event.payload.id))
-          : Effect.void,
-      ),
+      Stream.runForEach(orchestrator.streamDomainEvents, (event) => {
+        if (event.type !== "run.updated") return Effect.void;
+        const { id, status } = event.payload;
+        if (event.threadId.startsWith(CEO_THREAD_PREFIX)) {
+          return status === "completed" || status === "interrupted" || status === "failed"
+            ? FiberMap.run(lessons, id, learn(event.threadId, id), { onlyIfMissing: true })
+            : Effect.void;
+        }
+        return status === "completed"
+          ? FiberMap.run(reviews, event.threadId, review(event.threadId, id))
+          : Effect.void;
+      }),
     );
   });
   return { start };

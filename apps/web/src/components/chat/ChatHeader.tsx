@@ -432,7 +432,7 @@ export const ChatHeader = memo(function ChatHeader({
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
-      {isServerThread && canOperateThread ? <CeoToggle threadRef={activeThreadRef} /> : null}
+      {canOperateThread ? <CeoToggle threadRef={activeThreadRef} draft={!isServerThread} /> : null}
     </div>
   );
 });

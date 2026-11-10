@@ -9,6 +9,7 @@ import type { ProviderTextGeneration } from "./textGeneration.ts";
 import {
   buildBranchNamePrompt,
   buildCeoContextPrompt,
+  buildCeoFeedbackPrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildReviewGuidePrompt,
@@ -180,6 +181,22 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     return { context: generated.context.trim() };
   });
 
+  const generateCeoFeedback: ProviderTextGeneration["generateCeoFeedback"] = Effect.fn(
+    `${name}.generateCeoFeedback`,
+  )(function* (input) {
+    const generated = yield* run({
+      operation: "generateCeoFeedback",
+      cwd: input.cwd,
+      modelSelection: input.modelSelection,
+      ...buildCeoFeedbackPrompt(input),
+    });
+    return {
+      verdict: generated.verdict,
+      lesson: generated.lesson.trim(),
+      playbook: generated.playbook.trim(),
+    };
+  });
+
   return {
     generateCommitMessage,
     generatePrContent,
@@ -187,5 +204,6 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     generateThreadTitle,
     generateReviewGuide,
     generateCeoContext,
+    generateCeoFeedback,
   } satisfies ProviderTextGeneration;
 }

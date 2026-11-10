@@ -190,7 +190,9 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     ) {
       // Claude adds its cwd's git status to the prompt; these jobs must see only their input.
       const workingDirectory =
-        operation === "generateThreadTitle" || operation === "generateCeoContext"
+        operation === "generateThreadTitle" ||
+        operation === "generateCeoContext" ||
+        operation === "generateCeoFeedback"
           ? yield* fileSystem
               .makeTempDirectoryScoped({ prefix: "t3code-claude-title-" })
               .pipe(

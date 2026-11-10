@@ -260,6 +260,7 @@ it.effect("refreshes the failing instance snapshot after a committed usage_limit
           generateThreadTitle: () => Effect.die("unused"),
           generateReviewGuide: () => Effect.die("unused"),
           generateCeoContext: () => Effect.die("unused"),
+          generateCeoFeedback: () => Effect.die("unused"),
         },
         snapshot: {
           refreshUsage: Deferred.succeed(refreshed, undefined).pipe(Effect.asVoid),

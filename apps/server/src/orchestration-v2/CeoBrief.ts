@@ -59,6 +59,7 @@ export interface CeoBriefInput {
   readonly parentThreadId: string;
   readonly excludedSessionIds: ReadonlyArray<string>;
   readonly userInstructions: string | null;
+  readonly playbook: string | null;
 }
 
 /** The CEO side chat's first message. The user reads it too, so it stays plain. */
@@ -89,6 +90,14 @@ export function buildCeoBrief(input: CeoBriefInput): string {
     `- Workspace: ${workspace}`,
     ...(input.branch === null ? [] : [`- Branch: ${input.branch}`]),
     "",
+    ...(input.playbook === null
+      ? []
+      : [
+          "## The user's playbook for CEOs",
+          "Rules distilled from the user's own feedback on earlier CEO proposals. They outrank your defaults; follow every one that applies.",
+          input.playbook,
+          "",
+        ]),
     "## Research before you decide",
     "Use every source on this machine that tells you about the user, the project, and how the user decides:",
     "- The project itself, read-only: README, CLAUDE.md or AGENTS.md, docs, plans, recent git history and the working tree's current state.",
@@ -111,7 +120,7 @@ export function buildCeoBrief(input: CeoBriefInput): string {
     "4. **Considered and rejected**: one line each.",
     "5. **Prompt for the main thread**: one fenced block marked `prompt` (open it with four backticks when the prompt itself contains code fences), self-contained, with the goal, concrete steps, constraints and how to verify it is done.",
     "",
-    "The user may ask follow-up questions here. When an answer changes the plan, end it with the full updated prompt block.",
+    "The user may ask follow-up questions or judge your proposal here. Their judgments are recorded and turned into playbook rules for future CEOs. When they criticize it, take the point fully, revise, and end with the full updated prompt block.",
     ...(input.userInstructions === null
       ? []
       : ["", "## Standing instructions from the user", input.userInstructions]),

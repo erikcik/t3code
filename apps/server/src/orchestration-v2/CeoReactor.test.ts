@@ -157,14 +157,40 @@ function forkTransfer(targetThreadId: ThreadId): OrchestrationV2ContextTransfer 
   };
 }
 
+const ceoChatId = ThreadId.make("ceo:ceo-parent:1");
+
+function ceoChat(reply: string, replyBy: "user" | "agent" = "user"): Records {
+  const base = records();
+  return {
+    ...base,
+    thread: {
+      ...base.thread,
+      id: ceoChatId,
+      tags: [],
+      lineage: { ...base.thread.lineage, parentThreadId: threadId, sideChat: true, ceo: true },
+    },
+    runs: [run(1, "completed"), run(2, "completed")],
+    messages: [
+      { ...message(1, "user", "BRIEF"), createdBy: "agent" },
+      message(1, "assistant", "PROPOSAL: add coupons"),
+      { ...message(2, "user", reply), createdBy: replyBy },
+      message(2, "assistant", "Revised."),
+    ],
+  };
+}
+
 function runReactor(input: {
   readonly parent: Records;
   readonly children?: ReadonlyArray<Records>;
+  readonly event?: { readonly threadId: ThreadId; readonly ordinal: number };
+  readonly files?: Readonly<Record<string, string>>;
+  readonly verdict?: "praise" | "criticism" | "mixed" | "none";
 }) {
   return Effect.gen(function* () {
     const done = yield* Deferred.make<void>();
     const dispatched: Array<OrchestrationV2ServerCommand> = [];
     const cleaned: Array<string> = [];
+    const judged: Array<{ readonly proposal: string; readonly reply: string }> = [];
     const written = new Map<string, string>();
     const tracer = Tracer.make({
       span(options) {
@@ -172,7 +198,9 @@ function runReactor(input: {
         const end = span.end.bind(span);
         span.end = (...args) => {
           end(...args);
-          if (span.name === "CeoReactor.review") Deferred.doneUnsafe(done, Effect.void);
+          if (span.name === "CeoReactor.review" || span.name === "CeoReactor.learn") {
+            Deferred.doneUnsafe(done, Effect.void);
+          }
         };
         return span;
       },
@@ -185,10 +213,13 @@ function runReactor(input: {
         streamDomainEvents: Stream.make({
           id: EventId.make("ceo-run-completed"),
           type: "run.updated",
-          threadId,
+          threadId: input.event?.threadId ?? threadId,
           runId: input.parent.runs.at(-1)!.id,
           occurredAt: at,
-          payload: input.parent.runs.find((candidate) => candidate.status === "completed")!,
+          payload:
+            input.event === undefined
+              ? input.parent.runs.find((candidate) => candidate.status === "completed")!
+              : run(input.event.ordinal, "completed"),
         }),
         dispatch: (command) =>
           Effect.sync(() => {
@@ -198,6 +229,7 @@ function runReactor(input: {
       }),
       Layer.mock(ProjectionStore.ProjectionStoreV2)({
         getThreadRecords: (id) => Effect.succeed(byId.get(id) as never),
+        getThread: (id) => Effect.succeed(byId.get(id)!.thread as never),
       }),
       Layer.mock(ProjectStore.ProjectStoreV2)({
         get: () =>
@@ -212,9 +244,21 @@ function runReactor(input: {
             cleaned.push(request.transcript);
             return { context: "CLEANED_CONTEXT" };
           }),
+        generateCeoFeedback: (request) =>
+          Effect.sync(() => {
+            judged.push({ proposal: request.proposal, reply: request.reply });
+            return {
+              verdict: input.verdict ?? "criticism",
+              lesson: "LESSON_TEXT",
+              playbook: "## Do\n- NEW_RULE",
+            };
+          }),
       }),
       FileSystem.layerNoop({
-        readFileString: () => Effect.fail(new Error("no instructions file") as never),
+        readFileString: (path) =>
+          input.files?.[path] === undefined
+            ? Effect.fail(new Error("missing file") as never)
+            : Effect.succeed(input.files[path]),
         exists: () => Effect.succeed(false),
         makeDirectory: () => Effect.void,
         writeFileString: (path, data) => Effect.sync(() => void written.set(path, data)),
@@ -229,7 +273,7 @@ function runReactor(input: {
       yield* reactor.start();
       yield* Deferred.await(done);
     }).pipe(Effect.provide(dependencies), Effect.withTracer(tracer));
-    return { dispatched, cleaned, written };
+    return { dispatched, cleaned, judged, written };
   });
 }
 
@@ -299,6 +343,7 @@ describe("CeoReactor", () => {
       const { dispatched, cleaned, written } = yield* runReactor({
         parent,
         children: [child(unanswered, 1), child(answered, 2)],
+        files: { "/state/ceo/playbook.md": "## Avoid\n- PLAYBOOK_RULE" },
       });
 
       expect(cleaned[0]).toContain("User: Build the checkout page");
@@ -321,7 +366,45 @@ describe("CeoReactor", () => {
       expect(text).toContain(contextPath);
       expect(text).toContain("native-session");
       expect(text).not.toContain("coupons");
+      expect(text).toContain("PLAYBOOK_RULE");
       expect(rest).toMatchObject([{ type: "thread.delete", threadId: unanswered }]);
+    }),
+  );
+  it.effect("records the user's judgment of a proposal and rewrites the playbook", () =>
+    Effect.gen(function* () {
+      const reply = "Too operational.\nThink about the goal first.";
+      const { judged, written, dispatched } = yield* runReactor({
+        parent: records(),
+        children: [ceoChat(reply)],
+        event: { threadId: ceoChatId, ordinal: 2 },
+      });
+      expect(judged).toEqual([{ proposal: "PROPOSAL: add coupons", reply }]);
+      const log = written.get("/state/ceo/feedback.md") ?? "";
+      expect(log).toContain("# CEO feedback log");
+      expect(log).toContain("criticism · Store · Launch the store");
+      expect(log).toContain("<!-- run:ceo-run-2 -->");
+      expect(log).toContain("> Too operational.\n> Think about the goal first.");
+      expect(log).toContain("**Lesson:** LESSON_TEXT");
+      expect(written.get("/state/ceo/playbook.md")).toBe("## Do\n- NEW_RULE\n");
+      expect(dispatched).toEqual([]);
+    }),
+  );
+
+  it.effect.each([
+    { name: "the server's own brief", event: 1, replyBy: "agent" as const, judges: false },
+    { name: "a reply already logged", event: 2, logged: true, judges: false },
+    { name: "a reply that judges nothing", event: 2, verdict: "none" as const, judges: true },
+  ])("learns nothing from $name", ({ event, replyBy, logged, verdict, judges }) =>
+    Effect.gen(function* () {
+      const { judged, written } = yield* runReactor({
+        parent: records(),
+        children: [ceoChat("Why not Stripe?", replyBy)],
+        event: { threadId: ceoChatId, ordinal: event },
+        ...(logged ? { files: { "/state/ceo/feedback.md": "<!-- run:ceo-run-2 -->" } } : {}),
+        ...(verdict === undefined ? {} : { verdict }),
+      });
+      expect(judged.length > 0).toBe(judges);
+      expect(written.size).toBe(0);
     }),
   );
 });

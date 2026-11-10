@@ -25,6 +25,8 @@ import * as ThreadTitleLinks from "./ThreadTitleLinks.ts";
 export type {
   CeoContextGenerationInput,
   CeoContextGenerationResult,
+  CeoFeedbackGenerationInput,
+  CeoFeedbackGenerationResult,
   BranchNameGenerationInput,
   BranchNameGenerationResult,
   CommitMessageGenerationInput,
@@ -47,7 +49,8 @@ type TextGenerationOp =
   | "generateBranchName"
   | "generateThreadTitle"
   | "generateReviewGuide"
-  | "generateCeoContext";
+  | "generateCeoContext"
+  | "generateCeoFeedback";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -148,6 +151,11 @@ export const make = Effect.gen(function* () {
     generateReviewGuide: Effect.fn("TextGeneration.generateReviewGuide")(function (input) {
       return generate("generateReviewGuide", input.modelSelection, (service, modelSelection) =>
         service.generateReviewGuide({ ...input, modelSelection }),
+      );
+    }),
+    generateCeoFeedback: Effect.fn("TextGeneration.generateCeoFeedback")(function (input) {
+      return generate("generateCeoFeedback", input.modelSelection, (service, modelSelection) =>
+        service.generateCeoFeedback({ ...input, modelSelection }),
       );
     }),
     generateCeoContext: Effect.fn("TextGeneration.generateCeoContext")(function (input) {

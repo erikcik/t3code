@@ -21,6 +21,7 @@ import { investigationUnsupported } from "@t3tools/provider-core/server/textGene
 import {
   buildBranchNamePrompt,
   buildCeoContextPrompt,
+  buildCeoFeedbackPrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
@@ -353,6 +354,20 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
     });
     return { context: generated.context.trim() };
   });
+  const generateCeoFeedback: ProviderTextGeneration["generateCeoFeedback"] = Effect.fn(
+    "MuseTextGeneration.generateCeoFeedback",
+  )(function* (input) {
+    const generated = yield* runMuseJson({
+      operation: "generateCeoFeedback",
+      ...buildCeoFeedbackPrompt(input),
+      modelSelection: input.modelSelection,
+    });
+    return {
+      verdict: generated.verdict,
+      lesson: generated.lesson.trim(),
+      playbook: generated.playbook.trim(),
+    };
+  });
   return {
     generateCommitMessage,
     generatePrContent,
@@ -360,5 +375,6 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
     generateThreadTitle,
     generateReviewGuide,
     generateCeoContext,
+    generateCeoFeedback,
   } satisfies ProviderTextGeneration;
 });

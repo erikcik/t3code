@@ -54,6 +54,7 @@ const unsupportedTextGeneration: ProviderTextGeneration = (() => {
     generateThreadTitle: () => unsupported("generateThreadTitle"),
     generateReviewGuide: () => unsupported("generateReviewGuide"),
     generateCeoContext: () => unsupported("generateCeoContext"),
+    generateCeoFeedback: () => unsupported("generateCeoFeedback"),
   };
 })();
 

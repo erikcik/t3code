@@ -108,6 +108,23 @@ export interface CeoContextGenerationResult {
   context: string;
 }
 
+export interface CeoFeedbackGenerationInput {
+  cwd: string;
+  today: string;
+  projectTitle: string;
+  threadTitle: string;
+  proposal: string;
+  reply: string;
+  playbook: string;
+  modelSelection: ModelSelection;
+}
+
+export interface CeoFeedbackGenerationResult {
+  verdict: "praise" | "criticism" | "mixed" | "none";
+  lesson: string;
+  playbook: string;
+}
+
 export interface ProviderTextGeneration {
   readonly generateCommitMessage: (
     input: CommitMessageGenerationInput,
@@ -133,4 +150,9 @@ export interface ProviderTextGeneration {
   readonly generateCeoContext: (
     input: CeoContextGenerationInput,
   ) => Effect.Effect<CeoContextGenerationResult, TextGenerationError>;
+
+  /** Judges the user's reply to a CEO proposal and folds any lesson into the CEO playbook. */
+  readonly generateCeoFeedback: (
+    input: CeoFeedbackGenerationInput,
+  ) => Effect.Effect<CeoFeedbackGenerationResult, TextGenerationError>;
 }

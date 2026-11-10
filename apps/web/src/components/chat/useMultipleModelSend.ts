@@ -40,6 +40,7 @@ import {
   startFanoutThread,
 } from "./chatViewSend";
 import type { useLocalDispatchState } from "./useLocalDispatchState";
+import { ceoDraftTags } from "../../lib/ceoDraftStore";
 
 interface MultipleModelSendInput {
   readonly environmentId: EnvironmentId;
@@ -185,6 +186,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
                       branch,
                       worktreePath: null,
                       createdAt: createdAt,
+                      ...ceoDraftTags(threadId),
                     },
                     prepareWorktree: {
                       projectCwd: project.workspaceRoot,
