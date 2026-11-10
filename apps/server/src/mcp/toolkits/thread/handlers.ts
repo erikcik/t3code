@@ -1,5 +1,7 @@
 import {
+  AUTOPILOT_THREAD_TAG,
   type CommandId,
+  isAutopilotThreadTag,
   type RuntimeRequestId,
   ThreadId,
   type OrchestrationV2ThreadProjection,
@@ -340,6 +342,26 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
         return yield* threads
           .settleThread({ ...common, byOwnAgent: caller?.id === projection.thread.id })
           .pipe(Effect.mapError(dispatchFailure));
+      }
+      if (input.action === "autopilot_on" || input.action === "autopilot_off") {
+        const tagged = input.action === "autopilot_on";
+        // Turning it off clears every spelling a user or agent may have tagged, like "Autopilot".
+        const spellings = (projection.thread.tags ?? []).filter(isAutopilotThreadTag);
+        const tags = tagged || spellings.length === 0 ? [AUTOPILOT_THREAD_TAG] : spellings;
+        let sequence = 0;
+        for (const tag of tags) {
+          const result = yield* threads
+            .dispatch({
+              commandId: yield* newCommandId(),
+              threadId: projection.thread.id,
+              type: "thread.tag.set",
+              tag,
+              tagged,
+            })
+            .pipe(Effect.mapError(dispatchFailure));
+          sequence = result.sequence;
+        }
+        return { sequence };
       }
       let command: OrchestrationV2Command;
       switch (input.action) {

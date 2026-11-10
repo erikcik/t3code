@@ -22,6 +22,7 @@ import {
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   AuthOrchestrationOperateScope,
+  hasAutopilotThreadTag,
   hasCeoThreadTag,
   type EnvironmentId,
   type EnvironmentMachineKind,
@@ -43,6 +44,7 @@ import {
   MessageCircleQuestionIcon,
   PinIcon,
   PinOffIcon,
+  PlaneIcon,
   ShieldQuestionIcon,
   SquarePenIcon,
   TerminalIcon,
@@ -526,6 +528,7 @@ const TOP_STATUS_ICONS = {
   failed: CircleAlertIcon,
   done: CircleCheckIcon,
   woke: AlarmClockIcon,
+  autopilot: PlaneIcon,
 } as const;
 
 function TopStatusIcon(props: { icon: keyof typeof TOP_STATUS_ICONS; className: string }) {
@@ -665,6 +668,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   };
   const isRegeneratingTitle = thread.titleRegeneration != null;
   const isCeoThread = hasCeoThreadTag(thread.source.tags);
+  const isAutopilotThread = hasAutopilotThreadTag(thread.source.tags);
   const localLastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const lastVisitedAt = resolveThreadLastVisitedAt(thread.lastVisitedAt, localLastVisitedAt);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
@@ -723,8 +727,17 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     isActive: props.isActive,
     isSelected,
   });
-  const topStatus =
-    status === "working"
+  // Autopilot (set by an agent only when asked) stands in for the quiet states; anything that needs
+  // the owner (approval, input, a guest request, a failure) still wins.
+  const isAutopilotStatus =
+    isAutopilotThread && (status === "working" || status === "waiting" || status === "ready");
+  const topStatus = isAutopilotStatus
+    ? {
+        label: "Autopilot",
+        icon: "autopilot" as const,
+        className: "text-autopilot-foreground",
+      }
+    : status === "working"
       ? {
           label: thread.goal?.status === "active" ? "Goal" : "Working",
           icon: "working" as const,

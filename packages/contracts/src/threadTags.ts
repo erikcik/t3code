@@ -24,3 +24,15 @@ export const isCeoThreadTag = (tag: string): boolean => tag.trim().toLowerCase()
 
 export const hasCeoThreadTag = (tags: ReadonlyArray<string> | undefined): boolean =>
   tags?.some(isCeoThreadTag) === true;
+
+/**
+ * Threads with this tag show a yellow Autopilot status in the sidebar. Agents set it only when the
+ * user explicitly asks for autopilot, e.g. for a recurring loop they run on their own.
+ */
+export const AUTOPILOT_THREAD_TAG = "autopilot";
+
+export const isAutopilotThreadTag = (tag: string): boolean =>
+  tag.trim().toLowerCase() === AUTOPILOT_THREAD_TAG;
+
+export const hasAutopilotThreadTag = (tags: ReadonlyArray<string> | undefined): boolean =>
+  tags?.some(isAutopilotThreadTag) === true;
