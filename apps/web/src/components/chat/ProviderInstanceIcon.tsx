@@ -7,7 +7,7 @@ import {
 } from "@t3tools/client-runtime/state/provider-instance-display";
 
 import { ProviderDriverKind } from "@t3tools/contracts";
-import { AntigravityIcon, ClaudeAI, Icon, OpenAI } from "../Icons";
+import { AntigravityIcon, ClaudeAI, Icon, NanoGPTIcon, OpenAI } from "../Icons";
 
 import { cn } from "~/lib/utils";
 import { providerClients } from "../settings/providerDriverMeta";
@@ -29,6 +29,14 @@ const PROVIDER_TEXT_COLOR_BY_PROVIDER: Partial<Record<ProviderDriverKind, string
   [ProviderDriverKind.make("claudeAgent")]: "text-[#d97757]",
   [ProviderDriverKind.make("antigravity")]: "text-[#5b87bf]",
 };
+
+// Fork: an instance named after a model gateway shows that gateway's logo instead of its
+// harness's (the NanoGPT instance runs on Pi or Claude Code but should read as NanoGPT).
+const GATEWAY_ICON_BY_DISPLAY_NAME: Readonly<Partial<Record<string, Icon>>> = {
+  nanogpt: NanoGPTIcon,
+};
+
+const gatewayKey = (displayName: string) => displayName.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 export function providerTextColor(driverKind: ProviderDriverKind): {
   readonly className?: string;
@@ -71,8 +79,12 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   badgeClassName?: string;
   indicatorBackground?: string;
 }) {
-  const Icon = PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null;
-  const packageIcon = providerClients.get(props.driverKind)?.icon;
+  const isGateway = GATEWAY_ICON_BY_DISPLAY_NAME[gatewayKey(props.displayName)] !== undefined;
+  const Icon =
+    GATEWAY_ICON_BY_DISPLAY_NAME[gatewayKey(props.displayName)] ??
+    PROVIDER_ICON_BY_PROVIDER[props.driverKind] ??
+    null;
+  const packageIcon = isGateway ? undefined : providerClients.get(props.driverKind)?.icon;
   const indicatorBackground = props.indicatorBackground ?? "var(--card)";
   const accentColor = normalizeProviderAccentColor(props.accentColor);
   const accentStyle = accentColor
