@@ -366,7 +366,9 @@ describe("CeoReactor", () => {
       expect(text).toContain(contextPath);
       expect(text).toContain("native-session");
       expect(text).not.toContain("coupons");
-      expect(text).toContain("PLAYBOOK_RULE");
+      expect(text.indexOf("PLAYBOOK_RULE")).toBeGreaterThan(
+        text.indexOf("## Answer in this shape"),
+      );
       expect(rest).toMatchObject([{ type: "thread.delete", threadId: unanswered }]);
     }),
   );

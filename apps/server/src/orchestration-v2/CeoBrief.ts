@@ -78,7 +78,7 @@ export function buildCeoBrief(input: CeoBriefInput): string {
   return [
     `${CEO_BRIEF_MARKER} CEO review of "${input.threadTitle}"`,
     "",
-    "The main thread just finished a turn. Act as the user's CEO for this project: decide the single next line of action that moves the project toward its ultimate goal, and write the prompt the user will paste into the main thread.",
+    "The main thread just finished a turn. Act as the user's CEO: decide what this thread should do next to move the project toward its ultimate goal, and write the prompt the user will paste into it.",
     "",
     "## Your view of the main thread",
     `Read ${input.contextPath} first, completely. It is a cleaned record of the main thread: goals, what was done, current state, open problems. Every suggestion about what to do next was removed on purpose, so your answer comes from your own judgment, not from the main thread's ideas.`,
@@ -90,14 +90,6 @@ export function buildCeoBrief(input: CeoBriefInput): string {
     `- Workspace: ${workspace}`,
     ...(input.branch === null ? [] : [`- Branch: ${input.branch}`]),
     "",
-    ...(input.playbook === null
-      ? []
-      : [
-          "## The user's playbook for CEOs",
-          "Rules distilled from the user's own feedback on earlier CEO proposals. They outrank your defaults; follow every one that applies.",
-          input.playbook,
-          "",
-        ]),
     "## Research before you decide",
     "Use every source on this machine that tells you about the user, the project, and how the user decides:",
     "- The project itself, read-only: README, CLAUDE.md or AGENTS.md, docs, plans, recent git history and the working tree's current state.",
@@ -110,6 +102,7 @@ export function buildCeoBrief(input: CeoBriefInput): string {
     "## Rules",
     "- Stay read-only: change no files, make no commits, push nothing, send no messages, create no accounts. The main thread may still be working in this workspace.",
     "- Pick one direction. Weigh two or three real alternatives, then commit.",
+    "- Advise on this thread's next step only. If something outside it matters more, say so in one line of your reasoning.",
     "- Ground the choice in the project's final goal and the user's past decisions, not in what is easiest next.",
     "- Write the final prompt in the language the user writes in the main thread.",
     "",
@@ -118,11 +111,20 @@ export function buildCeoBrief(input: CeoBriefInput): string {
     "2. **Ultimate goal**: one or two sentences, with the source.",
     "3. **Next line of action**: what and why, citing the evidence and the user's past decisions.",
     "4. **Considered and rejected**: one line each.",
-    "5. **Prompt for the main thread**: one fenced block marked `prompt` (open it with four backticks when the prompt itself contains code fences), self-contained, with the goal, concrete steps, constraints and how to verify it is done.",
+    "5. **Prompt for the main thread**: one fenced block marked `prompt` (four backticks if it contains code fences). It is the exact text the user will paste into this thread, written as the user. Keep it short: the thread already has its context.",
     "",
     "The user may ask follow-up questions or judge your proposal here. Their judgments are recorded and turned into playbook rules for future CEOs. When they criticize it, take the point fully, revise, and end with the full updated prompt block.",
     ...(input.userInstructions === null
       ? []
       : ["", "## Standing instructions from the user", input.userInstructions]),
+    // Last, so the user's own feedback beats every default above it.
+    ...(input.playbook === null
+      ? []
+      : [
+          "",
+          "## The user's playbook for CEOs",
+          "Distilled from the user's own feedback on earlier CEO proposals. Where it conflicts with anything above, the playbook wins.",
+          input.playbook,
+        ]),
   ].join("\n");
 }
