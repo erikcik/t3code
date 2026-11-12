@@ -10,7 +10,7 @@ import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime
 import { isElectron } from "../../env";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { cn } from "../../lib/utils";
-import { ensureLocalApi } from "../../localApi";
+import { getRestartWhenIdleTooltip, useRestartWhenIdleStore } from "../../lib/restartWhenIdle";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { usePrimaryManagedPolicy } from "../../state/managedPolicy";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -21,12 +21,16 @@ import {
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateDownloadedVersion,
   getDesktopUpdateIdleTooltip,
-  getDesktopUpdateInstallConfirmationMessage,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldShowArm64IntelBuildWarning,
   shouldToastDesktopUpdateActionResult,
 } from "../desktopUpdate.logic";
+import {
+  installLocalUpdateWhenIdle,
+  requestLocalUpdateInstall,
+  useLocalAgentActivity,
+} from "../desktopUpdate.restartWhenIdle";
 import { showDesktopUpdateDownloadedToast } from "../desktopUpdate.toast";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Popover, PopoverCreateHandle, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -245,17 +249,21 @@ function SidebarUpdateControl() {
     isDownloading,
     showCheckIcon,
   });
+  const restartScheduled = useRestartWhenIdleStore((store) => store.scheduledAt !== null);
+  const agentActivity = useLocalAgentActivity(restartScheduled);
   const idleTooltip =
     !showUpdateDetails && !showCheckIcon ? getDesktopUpdateIdleTooltip(state, updatesDenial) : null;
   const tooltip = runsEverything
     ? everything.summary
-    : showUpdateDetails
-      ? state
-        ? getDesktopUpdateButtonTooltip(state)
-        : "Update available"
-      : showCheckIcon
-        ? "Checking for updates…"
-        : (idleTooltip?.title ?? "Check for updates");
+    : restartScheduled && action === "install"
+      ? getRestartWhenIdleTooltip(agentActivity)
+      : showUpdateDetails
+        ? state
+          ? getDesktopUpdateButtonTooltip(state)
+          : "Update available"
+        : showCheckIcon
+          ? "Checking for updates…"
+          : (idleTooltip?.title ?? "Check for updates");
   const disabled = showCheckIcon
     ? true
     : runsEverything
@@ -297,27 +305,14 @@ function SidebarUpdateControl() {
     }
 
     if (action === "install") {
-      let confirmed = false;
-      try {
-        confirmed = await ensureLocalApi().dialogs.confirm(
-          getDesktopUpdateInstallConfirmationMessage(state),
-        );
-      } catch (error) {
-        setIsActionPending(false);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not confirm update",
-            description: error instanceof Error ? error.message : "Update confirmation failed.",
-          }),
-        );
-        return;
-      }
-      if (!confirmed) {
-        setIsActionPending(false);
-        return;
-      }
-      void installLocalUpdate(bridge).finally(() => setIsActionPending(false));
+      void requestLocalUpdateInstall({ state, install: () => installLocalUpdate(bridge) })
+        .catch((error: unknown) => {
+          toastUpdateError(
+            "Could not confirm update",
+            error instanceof Error ? error.message : "Update confirmation failed.",
+          );
+        })
+        .finally(() => setIsActionPending(false));
       return;
     }
 
@@ -365,7 +360,12 @@ function SidebarUpdateControl() {
             }
           : {}),
         ...(bridge && action !== "none"
-          ? { installLocal: (reportError) => installLocalUpdate(bridge, reportError) }
+          ? {
+              installLocal: (reportError) =>
+                installLocalUpdateWhenIdle(localUpdateVersion, () =>
+                  installLocalUpdate(bridge, reportError),
+                ),
+            }
           : {}),
       }),
     );
@@ -430,16 +430,19 @@ function SidebarUpdateControl() {
           {...(run.localVersion === null && action === "install" && window.desktopBridge
             ? {
                 onRestart: async () => {
-                  saveUpdateEverythingResult({
-                    localVersion: localUpdateVersion,
-                    updatedServers: 0,
-                    updatedProviders: 0,
-                    failures: [],
-                    restarting: [],
+                  const bridge = window.desktopBridge!;
+                  await installLocalUpdateWhenIdle(localUpdateVersion, async () => {
+                    saveUpdateEverythingResult({
+                      localVersion: localUpdateVersion,
+                      updatedServers: 0,
+                      updatedProviders: 0,
+                      failures: [],
+                      restarting: [],
+                    });
+                    const installed = await installLocalUpdate(bridge);
+                    if (!installed) clearSavedUpdateEverythingResult();
+                    return installed;
                   });
-                  if (!(await installLocalUpdate(window.desktopBridge!))) {
-                    clearSavedUpdateEverythingResult();
-                  }
                 },
               }
             : {})}

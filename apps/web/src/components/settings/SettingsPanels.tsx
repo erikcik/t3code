@@ -36,10 +36,10 @@ import {
   canCheckForUpdate,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateDisabledReason,
-  getDesktopUpdateInstallConfirmationMessage,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
 } from "../../components/desktopUpdate.logic";
+import { requestLocalUpdateInstall } from "../../components/desktopUpdate.restartWhenIdle";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
@@ -209,36 +209,25 @@ function AboutVersionSection() {
     if (action === "install") {
       if (isUpdateActionPending) return;
       setIsUpdateActionPending(true);
-      let confirmed = false;
-      try {
-        confirmed = await ensureLocalApi().dialogs.confirm(
-          getDesktopUpdateInstallConfirmationMessage(
-            updateState ?? { availableVersion: null, downloadedVersion: null },
-          ),
-        );
-      } catch (error) {
-        setIsUpdateActionPending(false);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not confirm update",
-            description: error instanceof Error ? error.message : "Update confirmation failed.",
+      void requestLocalUpdateInstall({
+        state: updateState ?? { availableVersion: null, downloadedVersion: null },
+        install: () =>
+          bridge.installUpdate().catch((error: unknown) => {
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Could not install update",
+                description: error instanceof Error ? error.message : "Install failed.",
+              }),
+            );
           }),
-        );
-        return;
-      }
-      if (!confirmed) {
-        setIsUpdateActionPending(false);
-        return;
-      }
-      void bridge
-        .installUpdate()
+      })
         .catch((error: unknown) => {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not install update",
-              description: error instanceof Error ? error.message : "Install failed.",
+              title: "Could not confirm update",
+              description: error instanceof Error ? error.message : "Update confirmation failed.",
             }),
           );
         })
