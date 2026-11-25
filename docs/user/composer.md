@@ -278,10 +278,11 @@ its progress.
   pauses it, and so does Codex ending its work without meeting the goal.
 - Stopping Claude ends the current turn, but the goal stays set. Claude checks it
   again at the end of your next message.
-- Pi has no goals of its own, so T3 Code asks it to keep going after each reply
-  until it ends a message with `GOAL COMPLETE`, or `GOAL BLOCKED: <reason>` when
-  it needs you. Pi supports `/goal pause` and `/goal resume`. Stopping a Pi goal
-  pauses it, and so do 20 checks without completion.
+- Pi has no goals of its own, so T3 Code tells it to treat the goal as solvable
+  and keeps it going after each reply until it ends a message with
+  `GOAL COMPLETE`. There is no "blocked" exit. Pi supports `/goal pause` and
+  `/goal resume`. Stopping a Pi goal pauses it, and so do a provider error and
+  20 checks without completion.
 - Sending a new goal, or `/goal resume`, while the agent works stops the current
   turn and starts the goal, unless you queue it. `/goal clear` and `/goal pause`
   stop the turn only when it is working on the goal. Other goal commands wait for

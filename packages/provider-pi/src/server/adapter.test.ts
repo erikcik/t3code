@@ -4666,10 +4666,7 @@ describe("PiAdapterV2 goals", () => {
 
       yield* assistantReply(fake, "Fixed two of three.");
       const next = yield* fake.takeRequest("prompt");
-      assert.match(
-        String(next["message"]),
-        /^The goal is not marked complete yet: all tests pass\n/,
-      );
+      assert.match(String(next["message"]), /^The goal is not complete yet: all tests pass\n/);
       yield* assistantReply(fake, "All green.\n\nGOAL COMPLETE");
 
       const events = yield* eventsThroughTerminal(takeEvent);
@@ -4746,6 +4743,38 @@ describe("PiAdapterV2 goals", () => {
       const nothing = yield* run("/goal resume", null, 4);
       assert.deepEqual(noticesIn(nothing), ["No goal is set."]);
       assert.isFalse(fake.allRequests().some((request) => request["type"] === "prompt"));
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("pauses an active goal when Pi's provider fails instead of blocking it", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread, "default", [], "/goal ship it");
+      yield* fake.takeRequest("prompt");
+      yield* assistantReply(fake, "Need a card number.\n\nGOAL BLOCKED: card number");
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({
+        type: "message_end",
+        message: { role: "assistant", stopReason: "error", errorMessage: "503 unavailable" },
+      });
+      yield* fake.emit({ type: "agent_settled" });
+
+      const events = yield* eventsThroughTerminal(takeEvent);
+      const terminal = events.at(-1);
+      assert.isTrue(terminal?.type === "turn.terminal" && terminal.status === "failed");
+      assert.deepEqual(goalsIn(events).at(-1), {
+        objective: "ship it",
+        status: "paused",
+        checks: 1,
+        lastCheck: "503 unavailable",
+      });
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

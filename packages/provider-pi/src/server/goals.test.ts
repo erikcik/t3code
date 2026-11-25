@@ -1,19 +1,16 @@
 import { expect, it } from "@effect/vitest";
 
-import { readPiGoalVerdict } from "./goals.ts";
+import { isPiGoalComplete } from "./goals.ts";
 
 it.each([
-  ["Done.\n\nGOAL COMPLETE", { type: "complete" }],
-  ["All tests pass.\n**Goal complete.**\n", { type: "complete" }],
-  ["GOAL COMPLETE\nThanks for waiting.", { type: "complete" }],
-  [
-    "GOAL BLOCKED: need the staging password",
-    { type: "blocked", reason: "need the staging password" },
-  ],
-  ["Stuck.\n`GOAL BLOCKED`", { type: "blocked", reason: "Needs your input." }],
-  ["I will mark GOAL COMPLETE once the build passes.", { type: "unmet" }],
-  ["GOAL COMPLETE\none\ntwo\nthree", { type: "unmet" }],
-  ["", { type: "unmet" }],
-] as const)("reads the goal verdict of %j", (reply, verdict) => {
-  expect(readPiGoalVerdict(reply)).toEqual(verdict);
+  ["Done.\n\nGOAL COMPLETE", true],
+  ["All tests pass.\n**Goal complete.**\n", true],
+  ["GOAL COMPLETE\nThanks for waiting.", true],
+  ["I will mark GOAL COMPLETE once the build passes.", false],
+  ["GOAL COMPLETE\none\ntwo\nthree", false],
+  // Older prompts offered a blocked exit; a reply that still takes it keeps the goal going.
+  ["Need a card number.\n\nGOAL BLOCKED: card number", false],
+  ["", false],
+] as const)("reads whether %j completes the goal", (reply, complete) => {
+  expect(isPiGoalComplete(reply)).toBe(complete);
 });

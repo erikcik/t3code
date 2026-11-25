@@ -46,8 +46,8 @@ import { parsePiCompactCommand, type PiCompactCommand } from "./commands.ts";
 import {
   applyPiGoalCommand,
   PI_GOAL_MAX_CHECKS,
+  isPiGoalComplete,
   piGoalContinuePrompt,
-  readPiGoalVerdict,
 } from "./goals.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -1564,27 +1564,20 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         const failure = turn.rejectedPromptFailure ?? turn.failure;
         if (failure !== null) {
           yield* updateProviderThread(state, {
-            goal: { ...goal, status: "blocked", lastCheck: failure.message },
+            goal: { ...goal, status: "paused", lastCheck: failure.message },
           });
           return false;
         }
         if (!turn.sawAgentActivity || turn.activeCompaction !== null || closed || stopRequested) {
           return false;
         }
-        const verdict = readPiGoalVerdict(turn.lastAssistantText);
-        if (verdict.type === "complete") {
+        if (isPiGoalComplete(turn.lastAssistantText)) {
           yield* updateProviderThread(state, {
             goal: {
               objective: goal.objective,
               status: "complete",
               ...(goal.checks === undefined ? {} : { checks: goal.checks }),
             },
-          });
-          return false;
-        }
-        if (verdict.type === "blocked") {
-          yield* updateProviderThread(state, {
-            goal: { ...goal, status: "blocked", lastCheck: verdict.reason },
           });
           return false;
         }

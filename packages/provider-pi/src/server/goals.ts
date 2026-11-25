@@ -1,28 +1,30 @@
 import type { OrchestrationV2GoalCommand, OrchestrationV2ProviderGoal } from "@t3tools/contracts";
 
 // Pi has no native goals. T3 keeps the goal on the provider thread and re-prompts Pi after each
-// settled run until the model ends a reply with one of these markers.
+// settled run until the model ends a reply with this marker. There is deliberately no "blocked"
+// exit: the goal ends only when it is done, paused, cleared or out of checks.
 const PI_GOAL_COMPLETE_MARKER = "GOAL COMPLETE";
-const PI_GOAL_BLOCKED_MARKER = "GOAL BLOCKED";
-/** Bounds what a model that never writes a marker can spend before the goal pauses. */
+/** Bounds what a model that never writes the marker can spend before the goal pauses. */
 export const PI_GOAL_MAX_CHECKS = 20;
 
-const GOAL_RULES = [
-  "Keep working on your own until the goal is achieved; do not stop to ask for confirmation.",
-  `When the goal is fully achieved and verified, end your final message with a line that says exactly: ${PI_GOAL_COMPLETE_MARKER}`,
-  `If you cannot make progress without the user, end your final message with a line: ${PI_GOAL_BLOCKED_MARKER}: <what you need>`,
+const GOAL_STANCE = [
+  "Approach this goal knowing it can be solved. Any problem yields to enough effort, enough parallelism and enough care.",
+  "Go down to first principles: what is actually true, what the goal really requires, and which of your assumptions say it cannot be done. Challenge those assumptions and try other routes before you settle on any conclusion.",
+  "Split independent work and run it in parallel: concurrent tool calls, and subagents when you have them.",
+  "Keep working on your own. Do not stop to ask for confirmation and do not hand the task back.",
+  `When the goal is fully achieved and you have verified it, end your final message with a line that says exactly: ${PI_GOAL_COMPLETE_MARKER}`,
 ].join("\n");
 
 function piGoalStartPrompt(objective: string): string {
-  return `Start working toward this goal: ${objective}\n\n${GOAL_RULES}`;
+  return `Start working toward this goal: ${objective}\n\n${GOAL_STANCE}`;
 }
 
 function piGoalResumePrompt(objective: string): string {
-  return `Resume working toward this goal: ${objective}\n\n${GOAL_RULES}`;
+  return `Resume working toward this goal: ${objective}\n\n${GOAL_STANCE}`;
 }
 
 export function piGoalContinuePrompt(objective: string): string {
-  return `The goal is not marked complete yet: ${objective}\n\nCheck what is still missing and continue.\n${GOAL_RULES}`;
+  return `The goal is not complete yet: ${objective}\n\nDo not hand it back. Return to first principles: what is still missing, what are you assuming is impossible, and which routes have you not tried yet? Take the most promising ones, run them in parallel where you can, and keep going.\n\n${GOAL_STANCE}`;
 }
 
 function describePiGoal(goal: OrchestrationV2ProviderGoal): string {
@@ -65,26 +67,12 @@ export function applyPiGoalCommand(
   }
 }
 
-export type PiGoalVerdict =
-  | { readonly type: "complete" }
-  | { readonly type: "blocked"; readonly reason: string }
-  | { readonly type: "unmet" };
-
-/** Reads a marker from the last few lines of the final reply, ignoring markdown decoration. */
-export function readPiGoalVerdict(finalReply: string): PiGoalVerdict {
-  const lines = finalReply
+/** Reads the marker from the last few lines of the final reply, ignoring markdown decoration. */
+export function isPiGoalComplete(finalReply: string): boolean {
+  return finalReply
     .split("\n")
     .map((line) => line.replace(/[*_`#>~]/gu, "").trim())
     .filter((line) => line.length > 0)
     .slice(-3)
-    .toReversed();
-  for (const line of lines) {
-    if (/^goal complete[.!]?$/iu.test(line)) return { type: "complete" };
-    const blocked = /^goal blocked\b[\s:.-]*(.*)$/iu.exec(line);
-    if (blocked !== null) {
-      const reason = blocked[1]?.trim() ?? "";
-      return { type: "blocked", reason: reason.length === 0 ? "Needs your input." : reason };
-    }
-  }
-  return { type: "unmet" };
+    .some((line) => /^goal complete[.!]?$/iu.test(line));
 }
