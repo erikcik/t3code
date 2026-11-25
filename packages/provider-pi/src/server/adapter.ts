@@ -45,10 +45,14 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import { parsePiCompactCommand, type PiCompactCommand } from "./commands.ts";
 import {
   applyPiGoalCommand,
-  PI_GOAL_MAX_CHECKS,
-  isPiGoalComplete,
-  piGoalContinuePrompt,
+  piGoalFeedback,
+  piGoalTranscript,
+  PI_GOAL_EVALUATOR_MODEL_ENV,
+  PI_GOAL_IDLE_BLOCK_CAP,
+  PI_GOAL_TRANSCRIPT_WINDOW_SHARE,
+  type PiGoalVerdict,
 } from "./goals.ts";
+import { makePiGoalEvaluator, type PiGoalEvaluator } from "./goalEvaluator.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -93,6 +97,8 @@ const PI_UNSOLICITED_ACTIVITY_ERROR =
   "Pi started agent work outside an active T3 turn. The session was stopped to prevent invisible tool execution.";
 const SETTLE_PROBE_MAX_ATTEMPTS = 3;
 const SETTLE_PROBE_RETRY_DELAY = Duration.millis(100);
+const PI_GOAL_CHECK_TIMEOUT = Duration.seconds(120);
+const PI_GOAL_DEFAULT_EVALUATOR_WINDOW = 128_000;
 
 const PiProviderCapabilitiesV2 = {
   runtimePolicy: { enforcement: "client-boundary" },
@@ -197,6 +203,8 @@ export interface PiAdapterV2Options {
       request: ProviderContinuationRequests.ProviderContinuationRequest,
     ) => Effect.Effect<void>;
   };
+  /** Judges an active goal after each stop; defaults to a separate tool-less Pi. */
+  readonly goalEvaluator?: PiGoalEvaluator;
 }
 
 function contentText(content: unknown): string {
@@ -364,8 +372,12 @@ interface ActivePiTurn {
   sawAgentActivity: boolean;
   adoptedWake: boolean;
   readonly promptMayBeCommandOnly: boolean;
-  /** Text of the latest top-level assistant message; goal checks read their marker from it. */
-  lastAssistantText: string;
+  /** The running goal evaluation. Pi is idle meanwhile, so Stop and steering must end it. */
+  goalCheck: Fiber.Fiber<void> | null;
+  goalCheckGeneration: number;
+  ranToolSinceGoalCheck: boolean;
+  /** Unmet checks in a row whose run made no tool call. */
+  goalIdleBlocks: number;
   latestCompactionAfterTokens: number | null;
   lastLiveUsedTokens: number | null;
   settleProbeGeneration: number;
@@ -436,6 +448,14 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   const host = yield* ProviderHost.ProviderHost;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const { continuationRequests } = options;
+  const goalEvaluator =
+    options.goalEvaluator ??
+    makePiGoalEvaluator({
+      settings: options.settings,
+      environment: options.environment,
+      cwd: host.paths.providerStatusCacheDir,
+      spawner,
+    });
 
   const protocolError = (detail: string, payload?: unknown) =>
     new ProviderAdapter.ProviderAdapterProtocolError({
@@ -1553,61 +1573,97 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         };
       });
 
-      /** Settles an active goal at the end of a run; true when it re-prompted Pi and the turn goes on. */
+      const cancelGoalCheck = (turn: ActivePiTurn) =>
+        Effect.suspend(() => {
+          const check = turn.goalCheck;
+          turn.goalCheck = null;
+          return check === null
+            ? Effect.void
+            : Fiber.interrupt(check).pipe(Effect.forkIn(scope), Effect.asVoid);
+        });
+
+      const pauseGoal = Effect.fnUntraced(function* (
+        state: PiThreadState,
+        turn: ActivePiTurn,
+        goal: NonNullable<OrchestrationV2ProviderThread["goal"]>,
+        cause: string,
+      ) {
+        yield* updateProviderThread(state, { goal: { ...goal, status: "paused" } });
+        yield* emitSystemNotice(
+          turn,
+          `goal-paused:${turn.providerTurn.id}`,
+          `Goal paused · ${cause} · send a message to continue`,
+        );
+      });
+
+      const goalEvaluatorModel = (turn: ActivePiTurn): string | null => {
+        const configured = options.environment[PI_GOAL_EVALUATOR_MODEL_ENV]?.trim();
+        if (configured !== undefined && configured.length > 0) return configured;
+        const model = turn.turnInput.modelSelection.model;
+        if (model !== PI_INHERIT_MODEL_SLUG) return model;
+        return baselineModel === null ? null : `${baselineModel.provider}/${baselineModel.modelId}`;
+      };
+
+      /** Starts the stop check for an active goal; true when the turn stays open for its verdict. */
       const settleGoal = Effect.fnUntraced(function* (state: PiThreadState, turn: ActivePiTurn) {
         const goal = state.providerThread.goal ?? null;
         if (goal?.status !== "active") return false;
-        if (turn.interrupted || turn.nativeAborted) {
-          yield* updateProviderThread(state, { goal: { ...goal, status: "paused" } });
-          return false;
-        }
-        const failure = turn.rejectedPromptFailure ?? turn.failure;
-        if (failure !== null) {
-          yield* updateProviderThread(state, {
-            goal: { ...goal, status: "paused", lastCheck: failure.message },
-          });
+        // A user interrupt leaves the goal as it is; the next message continues it.
+        if (turn.interrupted || turn.nativeAborted) return false;
+        if ((turn.rejectedPromptFailure ?? turn.failure) !== null) {
+          yield* pauseGoal(state, turn, goal, "the last turn could not finish");
           return false;
         }
         if (!turn.sawAgentActivity || turn.activeCompaction !== null || closed || stopRequested) {
           return false;
         }
-        if (isPiGoalComplete(turn.lastAssistantText)) {
-          yield* updateProviderThread(state, {
-            goal: {
-              objective: goal.objective,
-              status: "complete",
-              ...(goal.checks === undefined ? {} : { checks: goal.checks }),
-            },
-          });
-          return false;
-        }
-        const checks = (goal.checks ?? 0) + 1;
-        if (checks > PI_GOAL_MAX_CHECKS) {
-          const lastCheck = `Paused after ${PI_GOAL_MAX_CHECKS} checks without the goal being marked complete. Send /goal resume to keep going.`;
-          yield* updateProviderThread(state, { goal: { ...goal, status: "paused", lastCheck } });
-          yield* emitSystemNotice(turn, `goal-check:${turn.providerTurn.id}:limit`, lastCheck);
-          return false;
-        }
-        yield* updateProviderThread(state, {
-          goal: { ...goal, checks, lastCheck: "Not marked complete yet." },
-        });
-        yield* emitSystemNotice(
-          turn,
-          `goal-check:${turn.providerTurn.id}:${checks}`,
-          `Goal not marked complete yet. Continuing (check ${checks} of ${PI_GOAL_MAX_CHECKS}).`,
-        );
-        turn.lastAssistantText = "";
-        turn.settleWhenIdle = false;
-        turn.settleProbeGeneration += 1;
-        yield* sendPrompt({
+        yield* cancelGoalCheck(turn);
+        turn.goalCheckGeneration += 1;
+        const verdictRecord = {
+          type: "t3.goal_verdict",
           providerTurnId: turn.providerTurn.id,
-          kind: "turn_start",
-          record: {
-            type: "prompt",
-            message: piGoalContinuePrompt(goal.objective),
-            streamingBehavior: "steer",
-          },
-        });
+          generation: turn.goalCheckGeneration,
+          settleGeneration: turn.settleProbeGeneration,
+          ranTool: turn.ranToolSinceGoalCheck,
+        };
+        turn.ranToolSinceGoalCheck = false;
+        const model = goalEvaluatorModel(turn);
+        const window =
+          (model === null ? contextWindow : modelContextWindows.get(model)) ??
+          PI_GOAL_DEFAULT_EVALUATOR_WINDOW;
+        turn.goalCheck = yield* request({ type: "get_messages" }).pipe(
+          Effect.flatMap((data) => {
+            const messages = recordField(data, "messages");
+            return goalEvaluator({
+              model,
+              condition: goal.objective,
+              transcript: piGoalTranscript(
+                Array.isArray(messages) ? messages : [],
+                Math.floor(window * PI_GOAL_TRANSCRIPT_WINDOW_SHARE) * 4,
+              ),
+            });
+          }),
+          Effect.timeoutOption(PI_GOAL_CHECK_TIMEOUT),
+          Effect.matchEffect({
+            onSuccess: (verdict) =>
+              Queue.offer(
+                connection.events,
+                Option.isSome(verdict)
+                  ? { ...verdictRecord, verdict: verdict.value }
+                  : { ...verdictRecord, error: "the goal check timed out" },
+              ),
+            onFailure: (error) =>
+              Queue.offer(connection.events, {
+                ...verdictRecord,
+                error:
+                  error._tag === "PiGoalCheckError"
+                    ? `the goal check could not complete: ${error.detail}`
+                    : "the goal check could not read the conversation",
+              }),
+          }),
+          Effect.asVoid,
+          Effect.forkIn(scope),
+        );
         return true;
       });
 
@@ -1615,6 +1671,78 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         const turn = state.activeTurn;
         if (turn === null) return;
         if (yield* settleGoal(state, turn)) return;
+        yield* completeTurn(state, readUsage);
+      });
+
+      const applyGoalVerdict = Effect.fnUntraced(function* (
+        state: PiThreadState,
+        turn: ActivePiTurn,
+        goal: NonNullable<OrchestrationV2ProviderThread["goal"]>,
+        event: PiRpcRecord,
+      ) {
+        const verdict = (event["verdict"] ?? null) as PiGoalVerdict | null;
+        if (verdict === null) {
+          yield* pauseGoal(
+            state,
+            turn,
+            goal,
+            recordString(event, "error") ?? "the goal check could not complete",
+          );
+          return yield* completeTurn(state);
+        }
+        const checks = (goal.checks ?? 0) + 1;
+        const reason = verdict.reason.length === 0 ? undefined : verdict.reason;
+        const withReason = (status: "active" | "complete") => ({
+          objective: goal.objective,
+          status,
+          checks,
+          ...(reason === undefined ? {} : { lastCheck: reason }),
+        });
+        if (verdict.ok) {
+          yield* updateProviderThread(state, { goal: withReason("complete") });
+          return yield* completeTurn(state);
+        }
+        if (verdict.impossible) {
+          yield* updateProviderThread(state, { goal: null });
+          yield* emitSystemNotice(
+            turn,
+            `goal-impossible:${turn.providerTurn.id}`,
+            reason === undefined
+              ? "Goal ended: the condition can't be met."
+              : `Goal ended: the condition can't be met. ${reason}`,
+          );
+          return yield* completeTurn(state);
+        }
+        const unmet = withReason("active");
+        yield* updateProviderThread(state, { goal: unmet });
+        turn.goalIdleBlocks = event["ranTool"] === true ? 0 : turn.goalIdleBlocks + 1;
+        if (turn.goalIdleBlocks > PI_GOAL_IDLE_BLOCK_CAP) {
+          yield* pauseGoal(state, turn, unmet, "goal checks kept finding it unmet this turn");
+          return yield* completeTurn(state);
+        }
+        const feedbackReason = reason ?? "insufficient evidence in transcript";
+        yield* emitSystemNotice(
+          turn,
+          `goal-check:${turn.providerTurn.id}:${checks}`,
+          `Goal not met yet: ${feedbackReason}`,
+        );
+        turn.settleWhenIdle = false;
+        turn.settleProbeGeneration += 1;
+        yield* sendPrompt({
+          providerTurnId: turn.providerTurn.id,
+          kind: "turn_start",
+          record: {
+            type: "prompt",
+            message: piGoalFeedback(goal.objective, feedbackReason, checks > 1),
+            streamingBehavior: "steer",
+          },
+        });
+      });
+
+      const completeTurn = Effect.fnUntraced(function* (state: PiThreadState, readUsage = true) {
+        const turn = state.activeTurn;
+        if (turn === null) return;
+        yield* cancelGoalCheck(turn);
         state.activeTurn = null;
         const interrupted = turn.interrupted || turn.nativeAborted;
         const completedAt = yield* DateTime.now;
@@ -1879,7 +2007,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             if (turn === null) return;
             const message = event["message"];
             if (recordString(message, "role") !== "assistant") return;
-            turn.lastAssistantText = contentText(recordField(message, "content"));
             yield* completeOpenStreamItems(turn);
             if (recordString(message, "stopReason") === "error" && turn.failure === null) {
               turn.failure = makeProviderFailure({
@@ -1892,6 +2019,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           case "tool_execution_start":
             if (turn !== null) {
               turn.sawAgentActivity = true;
+              turn.ranToolSinceGoalCheck = true;
               yield* emitToolItem(turn, event, "start");
             }
             return;
@@ -2192,6 +2320,27 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           case "t3.rollback_barrier": {
             if (rollbackBarrier !== null && event["barrier"] === rollbackBarrier)
               yield* Deferred.succeed(rollbackBarrier, undefined);
+            return;
+          }
+          case "t3.goal_verdict": {
+            if (
+              state === null ||
+              turn === null ||
+              turn.goalCheck === null ||
+              turn.providerTurn.id !== event["providerTurnId"] ||
+              turn.goalCheckGeneration !== event["generation"]
+            ) {
+              return;
+            }
+            turn.goalCheck = null;
+            // Pi ran again after this check started; its next stop is checked instead.
+            if (turn.settleProbeGeneration !== event["settleGeneration"]) return;
+            const goal = state.providerThread.goal ?? null;
+            if (turn.interrupted || goal?.status !== "active") {
+              yield* completeTurn(state);
+              return;
+            }
+            yield* applyGoalVerdict(state, turn, goal, event);
             return;
           }
           case "t3.settle_probe": {
@@ -2618,6 +2767,12 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 : applyPiGoalCommand(goalCommand, turnInput.providerThread.goal ?? null);
             // A goal command that starts no work settles here and never reaches Pi.
             const goalControl = goalResult !== null && goalResult.prompt === null;
+            // Like Claude Code, any message continues a paused goal.
+            const pausedGoal = turnInput.providerThread.goal ?? null;
+            const resumedGoal =
+              goalResult === null && !continuation && pausedGoal?.status === "paused"
+                ? { ...pausedGoal, status: "active" as const }
+                : null;
             if (!continuation && !goalControl) yield* applySelection(turnInput.modelSelection);
             if (turnInput.appThread.title !== appliedSessionName) {
               yield* request({
@@ -2680,7 +2835,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               adoptedWake: false,
               promptMayBeCommandOnly:
                 compactCommand !== null || (payload?.message.trimStart().startsWith("/") ?? false),
-              lastAssistantText: "",
+              goalCheck: null,
+              goalCheckGeneration: 0,
+              ranToolSinceGoalCheck: false,
+              goalIdleBlocks: 0,
               latestCompactionAfterTokens: null,
               lastLiveUsedTokens: null,
               settleProbeGeneration: 0,
@@ -2743,7 +2901,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 status: "active",
                 firstRunOrdinal: state.providerThread.firstRunOrdinal ?? turnInput.runOrdinal,
                 lastRunOrdinal: turnInput.runOrdinal,
-                ...(goalResult === null ? {} : { goal: goalResult.goal }),
+                ...(goalResult !== null
+                  ? { goal: goalResult.goal }
+                  : resumedGoal === null
+                    ? {}
+                    : { goal: resumedGoal }),
               });
               if (goalControl) {
                 if (goalResult.reply !== null) {
@@ -2820,6 +2982,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 if (threadState?.activeTurn !== turn) {
                   return yield* protocolError(`Pi turn ${steerInput.providerTurnId} is not active`);
                 }
+                yield* cancelGoalCheck(turn);
                 if (compactCommand !== null) {
                   turn.manualCompactInFlight = true;
                   yield* connection.send(compactRpcRecord(compactCommand));
@@ -2868,6 +3031,15 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               return yield* protocolError(`Pi turn ${interruptInput.providerTurnId} is not active`);
             }
             turn.interrupted = true;
+            if (turn.goalCheck !== null && interruptInput.requestRuntimeRestart !== true) {
+              // Pi is idle while the goal check runs, so an abort would never settle the turn.
+              yield* sessionEventPermit.withPermits(1)(
+                Effect.gen(function* () {
+                  if (threadState?.activeTurn === turn) yield* finalizeTurn(threadState);
+                }),
+              );
+              return;
+            }
             if (
               interruptInput.requestRuntimeRestart === true ||
               turn.settleWhenIdle ||
