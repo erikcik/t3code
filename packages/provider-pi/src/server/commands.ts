@@ -8,6 +8,13 @@ const PI_COMPACT_SLASH_COMMAND: ServerProviderSlashCommand = {
   input: { hint: "Optional instructions" },
 };
 
+// T3 runs /goal for Pi (see goals.ts); Pi itself never sees the command.
+const PI_GOAL_SLASH_COMMAND: ServerProviderSlashCommand = {
+  name: "goal",
+  description: "Set a goal the agent works toward until it is done",
+  input: { hint: "<what done means> | pause | resume | clear" },
+};
+
 export interface PiCompactCommand {
   readonly customInstructions?: string;
 }
@@ -26,7 +33,11 @@ export function parsePiCompactCommand(text: string): PiCompactCommand | null {
 export function withPiBuiltinSlashCommands(
   commands: ReadonlyArray<ServerProviderSlashCommand>,
 ): ReadonlyArray<ServerProviderSlashCommand> {
-  return [PI_COMPACT_SLASH_COMMAND, ...commands.filter((command) => command.name !== "compact")];
+  return [
+    PI_COMPACT_SLASH_COMMAND,
+    PI_GOAL_SLASH_COMMAND,
+    ...commands.filter((command) => command.name !== "compact" && command.name !== "goal"),
+  ];
 }
 
 export interface PiDiscoveredCommands {

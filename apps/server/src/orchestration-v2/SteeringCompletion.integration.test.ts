@@ -485,6 +485,7 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
   canSteer = true,
   interruptTurn: Effect.Effect<void> = Effect.void,
   steeringAcceptsAttachments = true,
+  adapterDriver = driver,
 ) {
   const cwd = yield* checkpointWorkspace(name);
   const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
@@ -502,7 +503,7 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
   };
   const adapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
     instanceId,
-    driver,
+    driver: adapterDriver,
     getCapabilities: () => Effect.succeed(capabilities),
     planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
     openSession: (input) =>
@@ -514,14 +515,14 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
         ) =>
           Queue.offer(events, {
             type: "provider_turn.updated",
-            driver,
+            driver: adapterDriver,
             providerTurn: {
               id: ProviderTurnId.make(`provider-turn:${turn.attemptId}`),
               providerThreadId: turn.providerThread.id,
               nodeId: turn.rootNodeId,
               runAttemptId: turn.attemptId,
               nativeTurnRef: {
-                driver,
+                driver: adapterDriver,
                 nativeId: `native:${turn.attemptId}`,
                 strength: "strong",
               },
@@ -538,11 +539,11 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
           });
         return {
           instanceId,
-          driver,
+          driver: adapterDriver,
           providerSessionId: input.providerSessionId,
           providerSession: {
             id: input.providerSessionId,
-            driver,
+            driver: adapterDriver,
             providerInstanceId: instanceId,
             status: "ready",
             cwd,
@@ -556,12 +557,16 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
           ensureThread: ({ threadId }) =>
             Effect.succeed({
               id: ProviderThreadId.make(`provider-thread:${threadId}`),
-              driver,
+              driver: adapterDriver,
               providerInstanceId: instanceId,
               providerSessionId: input.providerSessionId,
               appThreadId: threadId,
               ownerNodeId: null,
-              nativeThreadRef: { driver, nativeId: "native-thread", strength: "strong" },
+              nativeThreadRef: {
+                driver: adapterDriver,
+                nativeId: "native-thread",
+                strength: "strong",
+              },
               nativeConversationHeadRef: null,
               status: "idle",
               firstRunOrdinal: null,
@@ -1509,8 +1514,15 @@ it.effect("queues a plain send behind the stopped queue and releases its hold", 
   ),
 );
 
-const goalHarness = Effect.fn("goalHarness")(function* (name: string) {
-  const harness = yield* nextTurnSelectionHarness(name);
+const goalHarness = Effect.fn("goalHarness")(function* (name: string, adapterDriver = driver) {
+  const harness = yield* nextTurnSelectionHarness(
+    name,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    adapterDriver,
+  );
   const send = (id: string, text: string, delivery: "queue" | "auto") =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -1549,26 +1561,31 @@ const goalHarness = Effect.fn("goalHarness")(function* (name: string) {
   return { ...harness, send, read };
 });
 
-it.effect("stops the running turn and starts a goal sent into it next", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const { steered, layer, startFirstTurn, send, read } = yield* goalHarness("goal-steer");
-      yield* Effect.gen(function* () {
-        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-        const threadId = yield* startFirstTurn;
-        yield* send("queued", "queued", "queue");
-        yield* send("goal", "/goal all tests pass", "auto");
-        yield* worker.drain();
+it.effect.each(["codex", "pi"])(
+  "stops the running %s turn and starts a goal sent into it next",
+  (goalDriver) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { steered, layer, startFirstTurn, send, read } = yield* goalHarness(
+          `goal-steer-${goalDriver}`,
+          ProviderDriverKind.make(goalDriver),
+        );
+        yield* Effect.gen(function* () {
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const threadId = yield* startFirstTurn;
+          yield* send("queued", "queued", "queue");
+          yield* send("goal", "/goal all tests pass", "auto");
+          yield* worker.drain();
 
-        assert.deepEqual(steered, []);
-        assert.deepEqual(yield* read(threadId), {
-          queue: ["queued"],
-          started: ["first", "/goal all tests pass"],
-          stopRequested: true,
-        });
-      }).pipe(Effect.provide(layer));
-    }),
-  ),
+          assert.deepEqual(steered, []);
+          assert.deepEqual(yield* read(threadId), {
+            queue: ["queued"],
+            started: ["first", "/goal all tests pass"],
+            stopRequested: true,
+          });
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
 );
 
 it.effect("queues a goal clear without stopping work when no goal drives it", () =>

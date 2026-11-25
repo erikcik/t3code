@@ -126,7 +126,10 @@ the next goal turn on its own milliseconds after the last one completes, so the
 and adds that turn to it. One run can therefore own several native turns. `/goal` commands that
 start no Codex turn settle on a provider turn without a native ref, which native rollback must
 not count. Claude's SDK mode emits no goal events; its adapter reads goal state from the
-synthetic command output and Stop hook feedback in the transcript.
+synthetic command output and Stop hook feedback in the transcript. Pi has no native goal, so its
+[adapter](../../packages/provider-pi/src/server/adapter.ts) owns the goal on the provider thread:
+when a run settles with the goal active, it reads a completion marker from the final reply and
+otherwise re-prompts Pi inside the same turn.
 
 Capabilities must describe what the provider can actually do. Antigravity can capture workspace
 checkpoints but cannot roll back its conversation. The [checkpoint boundary](./overview.md#turn-completion-and-checkpoints)

@@ -267,7 +267,7 @@ Claude instances can also compact idle threads for you. See
 
 ## Goals
 
-With Codex and Claude, send `/goal` followed by what "done" means, for example
+With Codex, Claude and Pi, send `/goal` followed by what "done" means, for example
 `/goal all tests in packages/api pass`. The agent keeps working across turns
 until it judges the goal met. The thread shows **Goal** while it works, and a
 line at the end of the thread (above the composer on mobile) shows the goal and
@@ -278,6 +278,10 @@ its progress.
   pauses it, and so does Codex ending its work without meeting the goal.
 - Stopping Claude ends the current turn, but the goal stays set. Claude checks it
   again at the end of your next message.
+- Pi has no goals of its own, so T3 Code asks it to keep going after each reply
+  until it ends a message with `GOAL COMPLETE`, or `GOAL BLOCKED: <reason>` when
+  it needs you. Pi supports `/goal pause` and `/goal resume`. Stopping a Pi goal
+  pauses it, and so do 20 checks without completion.
 - Sending a new goal, or `/goal resume`, while the agent works stops the current
   turn and starts the goal, unless you queue it. `/goal clear` and `/goal pause`
   stop the turn only when it is working on the goal. Other goal commands wait for

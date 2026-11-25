@@ -1065,7 +1065,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           maxRuntimeMode: managedPolicy.limits.maxRuntimeMode,
         };
 
-  /** The driver when this provider runs `/goal` natively, else undefined. */
+  /** The driver when this provider runs `/goal`, else undefined. */
   const goalDriverFor = Effect.fn("Orchestrator.goalDriverFor")(function* (
     command: OrchestrationV2ServerCommand,
     providerInstanceId: ProviderInstanceId,
@@ -1073,7 +1073,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const { driver } = yield* providerAdapters
       .get(providerInstanceId)
       .pipe(mapDispatchError(command));
-    return driver === "codex" || driver === "claudeAgent" ? driver : undefined;
+    return driver === "codex" || driver === "claudeAgent" || driver === "pi" ? driver : undefined;
   });
 
   /** Claude Code reads `/goal pause` and `/goal resume` as new goals named "pause" and "resume". */
@@ -5714,7 +5714,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     ) {
       dispatchMode = { type: "queue_after_active" };
     }
-    // Codex and Claude own /goal; elsewhere it is ordinary text that cannot steer.
+    // Codex, Claude and Pi run /goal; elsewhere it is ordinary text that cannot steer.
     const parsedGoalCommand = parseGoalCommand(command);
     const goalCommand =
       parsedGoalCommand === null ||

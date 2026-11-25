@@ -5,6 +5,7 @@ import { readToolOutputImage } from "@t3tools/shared/toolOutput";
 import * as Predicate from "effect/Predicate";
 import {
   ProviderDriverKind,
+  parseGoalCommand,
   type ChatAttachment,
   type ModelSelection,
   type OrchestrationV2ExecutionNode,
@@ -42,6 +43,12 @@ import { providerMessageTextWithAttachmentPaths } from "@t3tools/provider-core/s
 import { mcpToolPresentation } from "@t3tools/provider-core/server/mcpToolPresentation";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { parsePiCompactCommand, type PiCompactCommand } from "./commands.ts";
+import {
+  applyPiGoalCommand,
+  PI_GOAL_MAX_CHECKS,
+  piGoalContinuePrompt,
+  readPiGoalVerdict,
+} from "./goals.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -357,6 +364,8 @@ interface ActivePiTurn {
   sawAgentActivity: boolean;
   adoptedWake: boolean;
   readonly promptMayBeCommandOnly: boolean;
+  /** Text of the latest top-level assistant message; goal checks read their marker from it. */
+  lastAssistantText: string;
   latestCompactionAfterTokens: number | null;
   lastLiveUsedTokens: number | null;
   settleProbeGeneration: number;
@@ -1544,9 +1553,75 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         };
       });
 
+      /** Settles an active goal at the end of a run; true when it re-prompted Pi and the turn goes on. */
+      const settleGoal = Effect.fnUntraced(function* (state: PiThreadState, turn: ActivePiTurn) {
+        const goal = state.providerThread.goal ?? null;
+        if (goal?.status !== "active") return false;
+        if (turn.interrupted || turn.nativeAborted) {
+          yield* updateProviderThread(state, { goal: { ...goal, status: "paused" } });
+          return false;
+        }
+        const failure = turn.rejectedPromptFailure ?? turn.failure;
+        if (failure !== null) {
+          yield* updateProviderThread(state, {
+            goal: { ...goal, status: "blocked", lastCheck: failure.message },
+          });
+          return false;
+        }
+        if (!turn.sawAgentActivity || turn.activeCompaction !== null || closed || stopRequested) {
+          return false;
+        }
+        const verdict = readPiGoalVerdict(turn.lastAssistantText);
+        if (verdict.type === "complete") {
+          yield* updateProviderThread(state, {
+            goal: {
+              objective: goal.objective,
+              status: "complete",
+              ...(goal.checks === undefined ? {} : { checks: goal.checks }),
+            },
+          });
+          return false;
+        }
+        if (verdict.type === "blocked") {
+          yield* updateProviderThread(state, {
+            goal: { ...goal, status: "blocked", lastCheck: verdict.reason },
+          });
+          return false;
+        }
+        const checks = (goal.checks ?? 0) + 1;
+        if (checks > PI_GOAL_MAX_CHECKS) {
+          const lastCheck = `Paused after ${PI_GOAL_MAX_CHECKS} checks without the goal being marked complete. Send /goal resume to keep going.`;
+          yield* updateProviderThread(state, { goal: { ...goal, status: "paused", lastCheck } });
+          yield* emitSystemNotice(turn, `goal-check:${turn.providerTurn.id}:limit`, lastCheck);
+          return false;
+        }
+        yield* updateProviderThread(state, {
+          goal: { ...goal, checks, lastCheck: "Not marked complete yet." },
+        });
+        yield* emitSystemNotice(
+          turn,
+          `goal-check:${turn.providerTurn.id}:${checks}`,
+          `Goal not marked complete yet. Continuing (check ${checks} of ${PI_GOAL_MAX_CHECKS}).`,
+        );
+        turn.lastAssistantText = "";
+        turn.settleWhenIdle = false;
+        turn.settleProbeGeneration += 1;
+        yield* sendPrompt({
+          providerTurnId: turn.providerTurn.id,
+          kind: "turn_start",
+          record: {
+            type: "prompt",
+            message: piGoalContinuePrompt(goal.objective),
+            streamingBehavior: "steer",
+          },
+        });
+        return true;
+      });
+
       const finalizeTurn = Effect.fnUntraced(function* (state: PiThreadState, readUsage = true) {
         const turn = state.activeTurn;
         if (turn === null) return;
+        if (yield* settleGoal(state, turn)) return;
         state.activeTurn = null;
         const interrupted = turn.interrupted || turn.nativeAborted;
         const completedAt = yield* DateTime.now;
@@ -1811,6 +1886,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             if (turn === null) return;
             const message = event["message"];
             if (recordString(message, "role") !== "assistant") return;
+            turn.lastAssistantText = contentText(recordField(message, "content"));
             yield* completeOpenStreamItems(turn);
             if (recordString(message, "stopReason") === "error" && turn.failure === null) {
               turn.failure = makeProviderFailure({
@@ -2542,7 +2618,14 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             const continuation =
               turnInput.message.createdBy === "agent" &&
               turnInput.message.creationSource === "provider";
-            if (!continuation) yield* applySelection(turnInput.modelSelection);
+            const goalCommand = continuation ? null : parseGoalCommand(turnInput.message);
+            const goalResult =
+              goalCommand === null
+                ? null
+                : applyPiGoalCommand(goalCommand, turnInput.providerThread.goal ?? null);
+            // A goal command that starts no work settles here and never reaches Pi.
+            const goalControl = goalResult !== null && goalResult.prompt === null;
+            if (!continuation && !goalControl) yield* applySelection(turnInput.modelSelection);
             if (turnInput.appThread.title !== appliedSessionName) {
               yield* request({
                 type: "set_session_name",
@@ -2556,13 +2639,21 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             }
             // Resolve attachments before turn installation so failures cannot strand activeTurn.
             // Inject instructions through before_agent_start; wrapping user text breaks slash-command expansion.
-            const compactCommand = continuation
-              ? null
-              : parsePiCompactCommand(turnInput.message.text);
+            const compactCommand =
+              continuation || goalResult !== null
+                ? null
+                : parsePiCompactCommand(turnInput.message.text);
             const payload =
-              !continuation && compactCommand === null
-                ? yield* resolvePromptPayload(turnInput.message.text, turnInput.message.attachments)
-                : null;
+              goalResult !== null
+                ? goalResult.prompt === null
+                  ? null
+                  : { message: goalResult.prompt, images: [] }
+                : !continuation && compactCommand === null
+                  ? yield* resolvePromptPayload(
+                      turnInput.message.text,
+                      turnInput.message.attachments,
+                    )
+                  : null;
             const startedAt = yield* DateTime.now;
             const syntheticNativeTurnId = `${state.providerThread.id}:attempt:${turnInput.attemptId}`;
             const providerTurn: OrchestrationV2ProviderTurn = {
@@ -2573,7 +2664,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               providerThreadId: turnInput.providerThread.id,
               nodeId: turnInput.rootNodeId,
               runAttemptId: turnInput.attemptId,
-              nativeTurnRef: providerRef(syntheticNativeTurnId, "weak"),
+              // A goal control turn leaves nothing in Pi's session, so rollback must skip it.
+              nativeTurnRef: goalControl ? null : providerRef(syntheticNativeTurnId, "weak"),
               ordinal: turnInput.providerTurnOrdinal,
               status: "running",
               startedAt,
@@ -2595,6 +2687,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               adoptedWake: false,
               promptMayBeCommandOnly:
                 compactCommand !== null || (payload?.message.trimStart().startsWith("/") ?? false),
+              lastAssistantText: "",
               latestCompactionAfterTokens: null,
               lastLiveUsedTokens: null,
               settleProbeGeneration: 0,
@@ -2605,6 +2698,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               activeProviderRetry: null,
               failure: null,
               rejectedPromptFailure: null,
+              ...(goalControl ? { stopTreeRefs: null } : {}),
             };
             // Lock only install/send/start events; correlated setup must leave the pump free for dialogs.
             yield* Effect.gen(function* () {
@@ -2619,11 +2713,12 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               ) {
                 return yield* protocolError("Pi turn ownership changed before it could start");
               }
-              const wake = pendingWake?.state === state ? pendingWake : null;
+              // Native work awaiting a turn stays pending for a run that can adopt it.
+              const wake = pendingWake?.state === state && !goalControl ? pendingWake : null;
               if (wake !== null && wake.state.providerThread.appThreadId !== turnInput.threadId) {
                 return yield* protocolError("Pi native wake belongs to a different app thread");
               }
-              pendingWake = null;
+              if (!goalControl) pendingWake = null;
               state.providerThread = turnInput.providerThread;
               state.activeTurn = activeTurn;
               activeTurn.adoptedWake = wake !== null && !continuation;
@@ -2655,7 +2750,19 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 status: "active",
                 firstRunOrdinal: state.providerThread.firstRunOrdinal ?? turnInput.runOrdinal,
                 lastRunOrdinal: turnInput.runOrdinal,
+                ...(goalResult === null ? {} : { goal: goalResult.goal }),
               });
+              if (goalControl) {
+                if (goalResult.reply !== null) {
+                  yield* emitSystemNotice(
+                    activeTurn,
+                    `goal-command:${providerTurn.id}`,
+                    goalResult.reply,
+                  );
+                }
+                yield* finalizeTurn(state, false);
+                return;
+              }
               yield* updateProviderSession("running", null);
               if (wake !== null) {
                 for (const event of wake.events) {

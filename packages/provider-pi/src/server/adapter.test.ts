@@ -4619,6 +4619,171 @@ describe("PiAdapterV2", () => {
   );
 });
 
+describe("PiAdapterV2 goals", () => {
+  const eventsThroughTerminal = (
+    takeEvent: (
+      predicate: (event: ProviderAdapter.ProviderAdapterV2Event) => boolean,
+    ) => Effect.Effect<ProviderAdapter.ProviderAdapterV2Event>,
+  ) =>
+    Effect.gen(function* () {
+      const events: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
+      while (events.at(-1)?.type !== "turn.terminal") events.push(yield* takeEvent(() => true));
+      return events;
+    });
+  const goalsIn = (events: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>) =>
+    events.flatMap((event) =>
+      event.type === "provider_thread.updated" ? [event.providerThread.goal ?? null] : [],
+    );
+  const noticesIn = (events: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>) =>
+    events.flatMap((event) =>
+      event.type === "turn_item.updated" && event.turnItem.type === "system_notice"
+        ? [event.turnItem.message]
+        : [],
+    );
+  const assistantReply = (fake: FakePi, text: string) =>
+    Effect.gen(function* () {
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+      yield* fake.emit({
+        type: "message_end",
+        message: { role: "assistant", content: [{ type: "text", text }] },
+      });
+      yield* fake.emit({ type: "agent_settled" });
+    });
+
+  it.effect("re-prompts Pi in the same turn until it marks the goal complete", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread, "default", [], "/goal all tests pass");
+      const start = yield* fake.takeRequest("prompt");
+      assert.match(String(start["message"]), /^Start working toward this goal: all tests pass\n/);
+
+      yield* assistantReply(fake, "Fixed two of three.");
+      const next = yield* fake.takeRequest("prompt");
+      assert.match(
+        String(next["message"]),
+        /^The goal is not marked complete yet: all tests pass\n/,
+      );
+      yield* assistantReply(fake, "All green.\n\nGOAL COMPLETE");
+
+      const events = yield* eventsThroughTerminal(takeEvent);
+      const terminals = events.filter((event) => event.type === "turn.terminal");
+      assert.deepEqual(
+        terminals.map((event) => event.type === "turn.terminal" && event.status),
+        ["completed"],
+      );
+      assert.deepInclude(goalsIn(events), {
+        objective: "all tests pass",
+        status: "active",
+        checks: 1,
+        lastCheck: "Not marked complete yet.",
+      });
+      assert.deepEqual(goalsIn(events).at(-1), {
+        objective: "all tests pass",
+        status: "complete",
+        checks: 1,
+      });
+      assert.deepEqual(noticesIn(events), [
+        "Goal not marked complete yet. Continuing (check 1 of 20).",
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("settles goal commands that start no work without prompting Pi", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const registered = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const run = (text: string, goal: OrchestrationV2ProviderThread["goal"], runOrdinal: number) =>
+        Effect.gen(function* () {
+          yield* startTurn(
+            runtime,
+            { ...registered, goal },
+            "default",
+            [],
+            text,
+            undefined,
+            runOrdinal,
+          );
+          return yield* eventsThroughTerminal(takeEvent);
+        });
+
+      const paused = yield* run(
+        "/goal pause",
+        { objective: "ship it", status: "active", checks: 3 },
+        1,
+      );
+      assert.deepEqual(goalsIn(paused).at(-1), {
+        objective: "ship it",
+        status: "paused",
+        checks: 3,
+      });
+      assert.deepEqual(noticesIn(paused), []);
+      const settledTurn = paused.findLast((event) => event.type === "provider_turn.updated");
+      assert.isTrue(
+        settledTurn?.type === "provider_turn.updated" &&
+          settledTurn.providerTurn.status === "completed" &&
+          settledTurn.providerTurn.nativeTurnRef === null,
+      );
+
+      const shown = yield* run("/goal", { objective: "ship it", status: "paused" }, 2);
+      assert.deepEqual(noticesIn(shown), ["Goal paused: ship it"]);
+
+      const cleared = yield* run("/goal clear", { objective: "ship it", status: "paused" }, 3);
+      assert.isNull(goalsIn(cleared).at(-1));
+      assert.deepEqual(noticesIn(cleared), ["Goal cleared: ship it"]);
+
+      const nothing = yield* run("/goal resume", null, 4);
+      assert.deepEqual(noticesIn(nothing), ["No goal is set."]);
+      assert.isFalse(fake.allRequests().some((request) => request["type"] === "prompt"));
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("pauses an active goal when Stop interrupts its turn", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread, "default", [], "/goal ship it");
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      const running = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+      );
+      assert.isTrue(running.type === "provider_turn.updated");
+      if (running.type !== "provider_turn.updated") return;
+      yield* runtime.interruptTurn({ providerThread, providerTurnId: running.providerTurn.id });
+      yield* fake.takeRequest("abort");
+      yield* fake.emit({ type: "agent_settled" });
+
+      const events = yield* eventsThroughTerminal(takeEvent);
+      const terminal = events.at(-1);
+      assert.isTrue(terminal?.type === "turn.terminal" && terminal.status === "interrupted");
+      assert.deepEqual(goalsIn(events).at(-1), {
+        objective: "ship it",
+        status: "paused",
+        checks: 0,
+      });
+      assert.equal(fake.allRequests().filter((request) => request["type"] === "prompt").length, 1);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+});
+
 describe("PiRpc framing", () => {
   it.effect("reassembles records and warns when dropping oversized records", () => {
     const warnings: Array<ReadonlyArray<unknown>> = [];
